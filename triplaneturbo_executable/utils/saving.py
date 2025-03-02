@@ -15,8 +15,12 @@ from matplotlib.colors import LinearSegmentedColormap
 from PIL import Image, ImageDraw
 from pytorch_lightning.loggers import WandbLogger
 
-from threestudio.models.mesh import Mesh
-from threestudio.utils.typing import *
+from ..utils.mesh import Mesh
+
+from typing import Dict, List, Optional, Union, Any
+from omegaconf import DictConfig
+from jaxtyping import Float
+from torch import Tensor
 
 import threading
 

@@ -165,8 +165,11 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
 
         # and load adapter weights
         if pretrained_model_name_or_path.endswith(".pth"):
-            state_dict = torch.load(pretrained_model_name_or_path)
-            new_state_dict = state_dict
+            state_dict = torch.load(pretrained_model_name_or_path)["state_dict"]
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                new_key = key.replace("geometry.", "")
+                new_state_dict[new_key] = value
             _, unused = geometry.load_state_dict(new_state_dict, strict=False)
             if len(unused) > 0:
                 print(f"Unused keys: {unused}")
