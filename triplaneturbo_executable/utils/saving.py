@@ -492,6 +492,54 @@ class SaverMixin:
         mesh.export(save_path)
         return save_path
 
+    # def save_obj(
+    #     self,
+    #     filename: str,
+    #     mesh: Mesh,
+    #     save_mat: bool = False,
+    #     save_normal: bool = False,
+    #     save_uv: bool = False,
+    #     save_vertex_color: bool = False,
+    #     map_Kd: Optional[Float[Tensor, "H W 3"]] = None,
+    #     map_Ks: Optional[Float[Tensor, "H W 3"]] = None,
+    #     map_Bump: Optional[Float[Tensor, "H W 3"]] = None,
+    #     map_Pm: Optional[Float[Tensor, "H W 1"]] = None,
+    #     map_Pr: Optional[Float[Tensor, "H W 1"]] = None,
+    #     map_format: str = "jpg",
+    # ) -> List[str]:
+
+    #     if not filename.endswith(".obj"):
+    #         filename += ".obj"
+    #     save_path = self.get_save_path(filename)
+    #     v_pos, t_pos_idx = self.convert_data(mesh.v_pos), self.convert_data(
+    #         mesh.t_pos_idx
+    #     )
+    #     v_nrm, v_tex, t_tex_idx, v_rgb = None, None, None, None
+    #     if save_normal:
+    #         v_nrm = self.convert_data(mesh.v_nrm)
+    #     if save_uv:
+    #         v_tex, t_tex_idx = self.convert_data(mesh.v_tex), self.convert_data(
+    #             mesh.t_tex_idx
+    #         )
+    #     if save_vertex_color:
+    #         v_rgb = self.convert_data(mesh.v_rgb)
+            
+    #     # use trimesh to save obj
+    #     mesh = trimesh.Trimesh(
+    #         vertices=v_pos,
+    #         faces=t_pos_idx,
+    #         vertex_normals=v_nrm,
+    #         vertex_colors=v_rgb,
+    #         visual=trimesh.visual.TextureVisuals(
+    #             uv=v_tex,
+    #             face_uv=t_tex_idx
+    #         ) if save_uv else None
+    #     )
+
+    #     # save the mesh to obj
+    #     mesh.export(save_path)
+    #     return [save_path]
+
     def save_obj(
         self,
         filename: str,

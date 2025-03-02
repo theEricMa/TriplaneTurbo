@@ -200,7 +200,8 @@ class MeshExporter(SaverMixin):
 
 def export_obj(
         mesh: Mesh, 
-        save_path: str
+        save_path: str,
+        save_normal: bool = False,
     ) -> List[str]:
     """
     Export mesh data to OBJ file format.
@@ -221,7 +222,7 @@ def export_obj(
         os.path.basename(save_path),
         mesh,
         save_mat=None,
-        save_normal=mesh.v_nrm is not None,
+        save_normal=save_normal and mesh.v_nrm is not None,
         save_uv=False,
         save_vertex_color=mesh.v_rgb is not None,
     )
