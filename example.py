@@ -43,6 +43,45 @@ output = triplane_turbo_pipeline(
 # Save mesh
 os.makedirs(output_dir, exist_ok=True)
 for i, mesh in enumerate(output["mesh"]):
+    vertices = mesh.v_pos
+    
+    # 1. First rotate -90 degrees around X-axis to make the model face up
+    vertices = torch.stack([
+        vertices[:, 0],           # x remains unchanged
+        vertices[:, 2],           # y = z
+        -vertices[:, 1]           # z = -y
+    ], dim=1)
+    
+    # 2. Then rotate 90 degrees around Y-axis to make the model face the observer
+    vertices = torch.stack([
+        -vertices[:, 2],          # x = -z
+        vertices[:, 1],           # y remains unchanged
+        vertices[:, 0]            # z = x
+    ], dim=1)
+    
+    mesh.v_pos = vertices
+    
+    # If mesh has normals, they need to be rotated in the same way
+    if mesh.v_nrm is not None:
+        normals = mesh.v_nrm
+        # 1. Rotate -90 degrees around X-axis
+        normals = torch.stack([
+            normals[:, 0],
+            normals[:, 2],
+            -normals[:, 1]
+        ], dim=1)
+        # 2. Rotate 90 degrees around Y-axis
+        normals = torch.stack([
+            -normals[:, 2],
+            normals[:, 1],
+            normals[:, 0]
+        ], dim=1)
+        mesh._v_nrm = normals
+    
+    name = f"{prompt.replace(' ', '_')}_{i}"
+    save_paths = export_obj(mesh, f"{output_dir}/{name}.obj")
+    mesh_path = save_paths[0]
+
     name = f"{prompt.replace(' ', '_')}_{i}"
     save_paths = export_obj(mesh, f"{output_dir}/{name}.obj")
     print(f"Saved mesh to: {save_paths}")
