@@ -3,6 +3,7 @@ import torch
 import argparse
 from typing import *
 from diffusers import StableDiffusionPipeline
+from collections import deque
 
 from triplaneturbo_executable.utils.mesh_exporter import export_obj
 from triplaneturbo_executable import TriplaneTurboTextTo3DPipeline, TriplaneTurboTextTo3DPipelineConfig
@@ -16,6 +17,7 @@ adapter_name_or_path = "pretrained/triplane_turbo_sd_v1.pth"
 num_results_per_prompt = 1
 seed = 42
 device = "cuda"
+max_obj_files = 100
 
 # download pretrained models if not exist
 if not os.path.exists(adapter_name_or_path):
@@ -39,6 +41,9 @@ output = triplane_turbo_pipeline(
     generator=torch.Generator(device=device).manual_seed(seed),
     device=device,
 )
+
+# Initialize a deque with maximum length of 100 to store obj file paths
+obj_file_queue = deque(maxlen=max_obj_files)
 
 # Save mesh
 os.makedirs(output_dir, exist_ok=True)
@@ -78,11 +83,17 @@ for i, mesh in enumerate(output["mesh"]):
         ], dim=1)
         mesh._v_nrm = normals
     
-    name = f"{prompt.replace(' ', '_')}_{i}"
+    # Save obj file and add its path to the queue
+    name = f"{prompt.replace(' ', '_')}_{seed}_{i}"
     save_paths = export_obj(mesh, f"{output_dir}/{name}.obj")
-    mesh_path = save_paths[0]
-
-    name = f"{prompt.replace(' ', '_')}_{i}"
-    save_paths = export_obj(mesh, f"{output_dir}/{name}.obj")
-    print(f"Saved mesh to: {save_paths}")
+    obj_file_queue.append(save_paths[0])
+    
+    # If an old file needs to be removed (queue is at max length)
+    # and the file exists, delete it
+    if len(obj_file_queue) == max_obj_files and os.path.exists(obj_file_queue[0]):
+        old_file = obj_file_queue[0]
+        try:
+            os.remove(old_file)
+        except OSError as e:
+            print(f"Error deleting file {old_file}: {e}")
 

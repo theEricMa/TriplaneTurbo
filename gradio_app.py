@@ -2,6 +2,7 @@ import os
 import torch
 import gradio as gr
 from typing import *
+from collections import deque
 from diffusers import StableDiffusionPipeline
 
 from triplaneturbo_executable import TriplaneTurboTextTo3DPipeline
@@ -11,6 +12,7 @@ from triplaneturbo_executable.utils.mesh_exporter import export_obj
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 ADAPTER_PATH = "pretrained/triplane_turbo_sd_v1.pth"
 PIPELINE = None  # Will hold our pipeline instance
+OBJ_FILE_QUEUE = deque(maxlen=100)  # Queue to store OBJ file paths
 
 def download_model():
     """Download the pretrained model if not exists"""
@@ -33,12 +35,15 @@ def initialize_pipeline():
         print("Pipeline initialized!")
     return PIPELINE
 
-def generate_3d_mesh(prompt: str, seed: int = 42) -> str:
+def generate_3d_mesh(prompt: str) -> Tuple[str, str]:
     """Generate 3D mesh from text prompt"""
-    global PIPELINE
+    global PIPELINE, OBJ_FILE_QUEUE
     
     # Use the global pipeline instance
     pipeline = initialize_pipeline()
+    
+    # Use fixed seed value
+    seed = 42
     
     # Generate mesh
     output = pipeline(
@@ -88,11 +93,23 @@ def generate_3d_mesh(prompt: str, seed: int = 42) -> str:
             ], dim=1)
             mesh._v_nrm = normals
         
-        name = f"{prompt.replace(' ', '_')}_{i}"
+        name = f"{prompt.replace(' ', '_')}"
         save_paths = export_obj(mesh, f"{output_dir}/{name}.obj")
         mesh_path = save_paths[0]
         
-    return mesh_path
+        # Add new file path to queue
+        OBJ_FILE_QUEUE.append(mesh_path)
+        
+        # If queue is at max length, remove oldest file
+        if len(OBJ_FILE_QUEUE) == OBJ_FILE_QUEUE.maxlen:
+            old_file = OBJ_FILE_QUEUE[0]  # Get oldest file (will be automatically removed from queue)
+            if os.path.exists(old_file):
+                try:
+                    os.remove(old_file)
+                except OSError as e:
+                    print(f"Error deleting file {old_file}: {e}")
+        
+    return mesh_path, mesh_path  # Return the path twice - once for 3D preview, once for download
 
 def main():
     # Download model if needed
@@ -105,28 +122,34 @@ def main():
     iface = gr.Interface(
         fn=generate_3d_mesh,
         inputs=[
-            gr.Textbox(label="Text Prompt", placeholder="Enter your text description..."),
-            gr.Number(label="Random Seed", value=42)
+            gr.Textbox(label="Text Prompt", placeholder="Enter your text description...")
         ],
-        outputs=gr.Model3D(
-            label="Generated 3D Mesh",
-            camera_position=(90, 90, 3),  # alpha=180° rotates to back, beta=0° for horizontal view, radius=2 units
-            clear_color=(0.5, 0.5, 0.5, 1),
-        ),
-        title="Text to 3D Mesh Generation",
-        description="Generate 3D meshes from text descriptions using TriplaneTurbo",
+        outputs=[
+            gr.Model3D(
+                label="Generated 3D Mesh",
+                camera_position=(90, 90, 3),
+                clear_color=(0.5, 0.5, 0.5, 1),
+            ),
+            gr.File(label="Download OBJ file")
+        ],
+        title="Text to 3D Mesh Generation with TriplaneTurbo",
+        description="Demo of the paper Progressive Rendering Distillation: Adapting Stable Diffusion for Instant Text-to-Mesh Generation beyond 3D Training Data [CVPR 2025] <br><a href='https://github.com/theEricMa/TriplaneTurbo' style='color: #2196F3;'>https://github.com/theEricMa/TriplaneTurbo</a>",
         examples=[
-            ["a beautiful girl", 42],
-            ["a cute cat", 123],
-            ["an elegant vase", 456],
-        ]
+            ["Armor dress style of outsiderzone fantasy helmet"],
+            ["Gandalf the grey riding a camel in a rock concert, victorian newspaper article, hyperrealistic"],
+            ["A DSLR photo of a bald eagle"],
+            ["A goblin riding a lawnmower in a hospital, victorian newspaper article, 4k hd"],
+            ["An imperial stormtrooper, highly detailed"],
+        ],
+        allow_flagging="never",
     )
     
     # Launch the interface
     iface.launch(
-        server_name="0.0.0.0",  # Allow external access
-        server_port=7860,       # Specify port
-        share=True,             # Create public link
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=True,
+        show_error=True,
     )
 
 if __name__ == "__main__":
