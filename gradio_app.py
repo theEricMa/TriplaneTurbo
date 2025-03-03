@@ -122,7 +122,11 @@ def main():
     iface = gr.Interface(
         fn=generate_3d_mesh,
         inputs=[
-            gr.Textbox(label="Text Prompt", placeholder="Enter your text description...")
+            gr.Textbox(
+                label="Text Prompt",
+                placeholder="Enter your text description...",
+                value="Armor dress style of outsiderzone fantasy helmet"
+            )
         ],
         outputs=[
             gr.Model3D(
