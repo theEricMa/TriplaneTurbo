@@ -74,7 +74,7 @@ system:
   specifiy_guidance_timestep: null # any of null, v1
   predition_type: "epsilon" # any of "epsilon", "sample", "sample_delta", "sample_delta_v2"
 
-  geometry_type: "one-step-triplane-dual-stable-diffusion"
+  geometry_type: "few-step-triplane-dual-stable-diffusion"
   geometry:
     radius: 1. 
     normal_type: "analytic"
