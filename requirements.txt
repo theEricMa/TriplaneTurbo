@@ -30,6 +30,10 @@ gradio==2.9.4
 # # 3d gaussian
 # plyfile
 
+# clipscore
+git+https://github.com/openai/CLIP.git
+scikit-learn
+
 # diffmc
 diso
 einops
