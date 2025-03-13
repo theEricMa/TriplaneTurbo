@@ -1,4 +1,4 @@
-name: "TriplaneTurbo_v1"
+name: "TriplaneTurbo_v1_mem-96G_iters-20k"
 tag: "${rmspace:${data.prompt_library},_}"
 exp_root_dir: "outputs"
 seed: 0
@@ -7,8 +7,6 @@ data_type: "multiview-multiprompt-dualrenderer-multistep-datamodule-v2"
 data:
   batch_size: 8 # should be the multiple of n_views
   n_view: 4 
-  # 0-4999: 64x64, >=5000: 512x512
-  # this drastically reduces VRAM usage as empty space is pruned in early training
   width: 512
   height: 512 # so high resolution !!
   ray_height: 128
@@ -23,7 +21,7 @@ data:
   eval_fovy_deg: 40.
   n_val_views: 40
   n_test_views: 120
-  # supervised data
+  # supervised data, not used in this config
   obj_library: "none"
   meta_json: "none"
   rgb_data_dir: "none"
@@ -31,7 +29,6 @@ data:
   depth_data_dir: "none"
   camera_data_dir: "none"
   frontal_idx: 24 # 24 is the frontal view
-  # the sup / unsup ratio, for training
   sup_unsup_mode: "vanilla" # "vanilla"
   dim_gaussian: [6, 4, 32, 32] 
   pure_zeros: false
@@ -58,21 +55,20 @@ system_type: "multiprompt-dual-renderer-multistep-generator-system"
 system:
   initialize_shape: false # #true #
   visualize_samples: false 
-  parallel_guidance: true
+  parallel_guidance: true # set true for speed-up when you have enough VRAM
 
   # gradient_accumulation_steps: 2 # to replace the accumulate_grad_batches because it is not supported in our method
 
-  # multi-step trianing / inference
   num_parts_training: 4 # TBD
   num_steps_training: 4 # TBD
   num_steps_sampling: 4
-  noise_scheduler: "ddim" 
+  noise_scheduler: "ddpm" 
   sample_scheduler: "ddim" 
   noise_addition: "gaussian" # TBD, any of "gaussian", "zero", "pred"
 
   scheduler_dir: ${system.geometry.space_generator_config.pretrained_model_name_or_path}
   specifiy_guidance_timestep: null # any of null, v1
-  predition_type: "epsilon" # any of "epsilon", "sample", "sample_delta", "sample_delta_v2"
+  predition_type: "epsilon"
 
   geometry_type: "few-step-triplane-dual-stable-diffusion"
   geometry:
@@ -80,10 +76,10 @@ system:
     normal_type: "analytic"
 
     sdf_bias: sphere
-    sdf_bias_params: 0.5 # a small bias will be fine?
+    sdf_bias_params: 0.5
 
     rotate_planes: v1
-    split_channels: v1 # v1: split channels for geometry and texture triplanes
+    split_channels: v1
 
     geo_interpolate: v1
     tex_interpolate: v2
@@ -92,14 +88,14 @@ system:
       pretrained_model_name_or_path: "pretrained/stable-diffusion-2-1-base"
       training_type: "self_lora_rank_16-cross_lora_rank_16-locon_rank_16" 
       timestep: 999
-      output_dim: 64 # 32 * 2 for v1
-      # gradient_checkpoint: true
+      output_dim: 64 # 32 * 2 for split_channels = v1
       self_lora_type: "hexa_v1"
       cross_lora_type: "vanilla"
       locon_type: "vanilla_v1"
       prompt_bias: false
-      # prompt_bias_lr_multiplier: 1
-      vae_attn_type: "basic" # "basic", "vanilla"
+      vae_attn_type: "basic"
+
+      # gradient_checkpoint: true
 
     isosurface_deformable_grid: true
 
@@ -119,7 +115,7 @@ system:
 
 
 
-  renderer_type: generative-space-dmtet-rasterize-renderer
+  renderer_type: generative-space-mesh-rasterize-renderer
   renderer:
     radius: ${system.geometry.radius}
     isosurface_remove_outliers: false
@@ -128,12 +124,12 @@ system:
     allow_empty_flag: false
 
     sdf_grad_shrink: 0. # sdf is not optimized w.r.t. the rasterizer
-    def_grad_shrink: 1 # def is optimized, but start from as small as 0
+    def_grad_shrink: 1 # def is optimized
 
 
   renderer_2nd_type: patch-renderer
   renderer_2nd:
-    base_renderer_type: generative-space-volsdf-volume-renderer
+    base_renderer_type: generative-space-sdf-volume-renderer
     base_renderer:
       radius: ${system.geometry.radius}
       use_volsdf: false
@@ -173,7 +169,7 @@ system:
     rd_weight: 1.
     rd_guidance_scale: 20.
     rd_weighting_strategy: "dmd"
-    cam_method: "rel_x2" # "", "rel" or ""
+    cam_method: "rel_x2" # default as in RichDreamer
 
     rd_use_sds: false
 
@@ -189,7 +185,7 @@ system:
 
     # the following are specific to ASD
     plus_schedule: "linear"
-    # the following are specific to the combination of ASD with MV and SD
+    # the following are specific to the combination of ASD with MV, RD, SD
     mv_plus_random: true
     mv_plus_ratio: 0.
     rd_plus_random: true
@@ -243,11 +239,9 @@ system:
       eps: 1.e-15
     params:
       geometry:
-        lr: 0.0002 # 0.002
+        lr: 0.0002
       background:
-        lr: 0.0002 # 0.002
-      # renderer_2nd:
-      #   lr: 0.0002 # 0.002
+        lr: 0.0002
 
 
 trainer:
