@@ -50,7 +50,7 @@ class MultiviewMultipromptDualRendererMultiStepDataModuleConfig:
     # the following settings are for unsupervised training ############################
     # the prompt corpus
     prompt_library: str = "magic3d_prompt_library"
-    prompt_library_dir: str = "load"
+    prompt_library_dir: str = "datasets"
     prompt_library_format: str = "json"
     # camera ranges are randomized, not specified
     unsup_elevation_range: Tuple[float, float] = (-10, 90)

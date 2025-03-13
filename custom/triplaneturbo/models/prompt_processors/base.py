@@ -32,7 +32,7 @@ class MultiPromptProcessor(BaseObject):
     @dataclass
     class Config(BaseObject.Config):
         prompt_library: str = "magic3d_prompt_library"
-        prompt_library_dir: str = "load"
+        prompt_library_dir: str = "datasets"
         prompt_library_format: str = "json"
 
         eval_prompt: Optional[str] = None
