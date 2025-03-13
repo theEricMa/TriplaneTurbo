@@ -26,11 +26,11 @@
 - **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
 
-## Start local inference in X seconds
+## Start local inference in 20 seconds
 
 ```python
-sh setup.sh
-python gradio.py
+bash setup.sh
+python gradio_app.py
 ```
 
 ## ⚙️ Dependencies and Installation for Training
