@@ -23,4 +23,5 @@
 ## 📢 News
 
 - **2025-03-13**: The source code and pretrained models are released.
+- **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
