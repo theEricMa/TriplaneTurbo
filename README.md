@@ -29,6 +29,8 @@
 ## 🌟 Start local inference in 20 seconds
 
 ```python
+python -m venv venv
+source venv/bin/activate
 bash setup.sh
 python gradio_app.py
 ```
