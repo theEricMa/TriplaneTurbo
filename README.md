@@ -26,7 +26,7 @@
 - **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
 
-## 🌟 Start local inference in 20 seconds
+## 🌟 Start local inference in 3 minutes
 
 ```python
 python -m venv venv
