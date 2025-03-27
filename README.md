@@ -28,6 +28,7 @@
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
 
 ## 🌟 Start local inference in 3 minutes
+If you only wish to set up the demo locally, use the following code for the inference. Otherwise, for training and evaluation, use the next section of instructions for environment setup.
 
 ```python
 python -m venv venv
