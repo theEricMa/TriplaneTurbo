@@ -12,8 +12,8 @@
 </div>
 
 
-[[Paper]](https://arxiv.org/pdf/2406.08177)
-[[HF Demo]](https://huggingface.co/spaces/ZhiyuanthePony/TriplaneTurbo)
+<a href='https://huggingface.co/spaces/ZhiyuanthePony/TriplaneTurbo'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Live_Demo-blue'></a>
+
 
 ---
 
@@ -22,6 +22,7 @@
 
 ## 🔥 News
 
+- **2025-03-27**: Training scripts are updated.
 - **2025-03-13**: The source code and pretrained models are released.
 - **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
