@@ -20,14 +20,22 @@
 </div>
 
 
-## 🔥 News
+## ⏩ Updates
 
 - **2025-03-27**: Training scripts are updated.
 - **2025-03-13**: The source code and pretrained models are released.
 - **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
 
-## 🌟 Start local inference in 3 minutes
+<!-- Features -->
+## 🌟 Features
+- **High-Efficiency Inference**: Our code excels in inference efficiency, capable of outputting textured mesh in around 1 second.
+- **Superior Text Prompt Comprehension**: It demonstrates strong understanding capabilities for complex text prompts, ensuring accurate generation according to the input.
+- **3D-Dataset-Free Training**: The entire training process doesn't rely on any 3D datasets, making it more resource-friendly and adaptable.
+
+<!-- Updates -->
+
+## 🤖 Start local inference in 3 minutes
 If you only wish to set up the demo locally, use the following code for the inference. Otherwise, for training and evaluation, use the next section of instructions for environment setup.
 
 ```python
@@ -37,7 +45,7 @@ bash setup.sh
 python gradio_app.py
 ```
 
-## ⚙️ Dependencies and Installation for Training
+## 🛠️ Official Installation
 <details>
 <summary> Create a virtual environment. </summary>
     
