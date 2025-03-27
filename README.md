@@ -29,9 +29,9 @@
 
 <!-- Features -->
 ## 🌟 Features
-- **High-Efficiency Inference**: Our code excels in inference efficiency, capable of outputting textured mesh in around 1 second.
-- **Superior Text Prompt Comprehension**: It demonstrates strong understanding capabilities for complex text prompts, ensuring accurate generation according to the input.
-- **3D-Dataset-Free Training**: The entire training process doesn't rely on any 3D datasets, making it more resource-friendly and adaptable.
+- **Fast Inference 🚀**: Our code excels in inference efficiency, capable of outputting textured mesh in around 1 second.
+- **Text Comprehension 🆙**: It demonstrates strong understanding capabilities for complex text prompts, ensuring accurate generation according to the input.
+- **3D-Data-Free Training 🙅‍♂️**: The entire training process doesn't rely on any 3D datasets, making it more resource-friendly and adaptable.
 
 <!-- Updates -->
 
@@ -46,63 +46,37 @@ python gradio_app.py
 ```
 
 ## 🛠️ Official Installation
-<details>
-<summary> Create a virtual environment. </summary>
-    
- ```sh
-conda create -n scaledreamer python=3.10
-conda activate scaledreamer
-```
-- Install PyTorch
+
+Create a virtual environment:
 ```sh
-# Prefer using the latest version of CUDA and PyTorch 
+conda create -n triplaneturbo python=3.10
+conda activate triplaneturbo
 conda install pytorch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 pytorch-cuda=12.1 -c pytorch -c nvidia
 ```
-- (Optional, Recommended) Install [xFormers](https://github.com/facebookresearch/xformers) for attention acceleration.
+(Optional, Recommended) Install xFormers for attention acceleration:
 ```sh
-conda install xformers -c xformers
+conda install xFormers -c xFormers
 ```
-- (Optional, Recommended) Install ninja to speed up the compilation of CUDA extensions:
-
+(Optional, Recommended) Install ninja to speed up the compilation of CUDA extensions
 ```sh
 pip install ninja
 ```
-
-- Install major dependencies:
-
+Install major dependencies
 ```sh
-pip install -r requirements_develop.txt
+pip install -r requirements.txt
 ```
-- Install [iNGP](https://github.com/NVlabs/instant-ngp) and [NerfAcc](https://github.com/nerfstudio-project/nerfacc):
-
+Install iNGP and NerfAcc
 ```sh
 export PATH="/usr/local/cuda/bin:$PATH"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindingstorch
 pip install git+https://github.com/KAIR-BAIR/nerfacc.git@v0.5.2
 ```
-If you encounter errors while installing iNGP, it is recommended to check your gcc version. Follow these instructions to change the gcc version within your conda environment. Then return to the repository directory to install iNGP and NerfAcc ⬆️ again.
- ```sh
+If you encounter errors while installing iNGP, it is recommended to check your gcc version. Follow these steps to change the gcc version within your -cconda environment. After that, return to the project directory and reinstall iNGP and NerfAcc:
+```sh
 conda install -c conda-forge gxx=9.5.0
 cd  $CONDA_PREFIX/lib
-ln -s  /usr/lib/x86_64-linux-gnu/libcuda.so ./
-cd <your repo directory>
+ln -s  /usr/lib/x86_64-linux-gnu/libcuda.so./
+cd <your project directory>
 ```
-</details>
-
-<details>
-<summary> Download Pretrained Models. </summary>
-
-```python
-python scripts/prepare/download.py
-```
-</details>
-
-<details>
-<summary> Download Training Corpus. </summary>
-
-```python
-python scripts/prepare/download.py
-```
-</details>
 
