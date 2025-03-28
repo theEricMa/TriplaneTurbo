@@ -826,6 +826,12 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
 
             real_batch_size = 1
             return_list = []
+
+            #################################################################################################
+            # sample the prompt
+            idx = np.random.randint(0, self.unsup_length)
+            prompt = self.unsup_prompt_library[idx]
+            
             # loop for n_steps
             for i in range(self.cfg.n_steps):
                     
@@ -866,12 +872,6 @@ class MultiviewMultipromptDualRendererSemiSupervisedDataModule4Training(BaseData
                     * (self.camera_distance_range[1] - self.camera_distance_range[0])
                     + self.camera_distance_range[0]
                 ).repeat_interleave(self.cfg.n_view, dim=0)
-
-                #################################################################################################
-                # sample the prompt
-                idx = np.random.randint(0, self.unsup_length)
-                prompt = self.unsup_prompt_library[idx]
-
 
                 return_list.append(
                     {
