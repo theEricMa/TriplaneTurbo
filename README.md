@@ -21,10 +21,10 @@
 
 </div>
 
-
+<!-- Updates -->
 ## ⏩ Updates
 
-- **2025-03-13**: The source code and pretrained models are released.
+- **2025-03-13**: The paper is now available on Arxiv.
 - **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
 
@@ -34,7 +34,6 @@
 - **Text Comprehension 🆙**: It demonstrates strong understanding capabilities for complex text prompts, ensuring accurate generation according to the input.
 - **3D-Data-Free Training 🙅‍♂️**: The entire training process doesn't rely on any 3D datasets, making it more resource-friendly and adaptable.
 
-<!-- Updates -->
 
 ## 🤖 Start local inference in 3 minutes
 If you only wish to set up the demo locally, use the following code for the inference. Otherwise, for training and evaluation, use the next section of instructions for environment setup.
@@ -81,5 +80,19 @@ ln -s  /usr/lib/x86_64-linux-gnu/libcuda.so./
 cd <your project directory>
 ```
 
+
+
 The README is currently under development. Please stay tuned for further updates.
+
+
+
+<!-- Acknowledgement -->
+## 🙏 Acknowledgement
+Our code is heavily based on the following works
+- [ThreeStudio](https://github.com/threestudio-project/threestudio): A clean and extensible codebase for 3D generation via Score Distillation.
+- [MVDream](https://github.com/bytedance/MVDream): Used as one of our multi - view teachers.
+- [RichDreamer](https://github.com/bytedance/MVDream): Serves as another multi - view teacher for normal and depth supervision
+- [3DTopia](https://github.com/3DTopia/3DTopia): Its text caption dataset is applied in our training and comparison.
+- [DiffMC](https://github.com/SarahWeiii/diso): Our solution uses its differentiable marching cube for mesh rasterization.
+- [NeuS](https://github.com/Totoro97/NeuS): We implement its SDF - based volume rendering for dual rendering in our solution
 
