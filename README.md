@@ -84,6 +84,18 @@ cd <your project directory>
 
 The README is currently under development. Please stay tuned for further updates.
 
+<!-- Citation -->
+## 📜 Citation
+
+If you find this work helpful, please consider citing our paper:
+```
+@article{ma2025progressive,
+  title={Progressive Rendering Distillation: Adapting Stable Diffusion for Instant Text-to-Mesh Generation beyond 3D Training Data},
+  author={Ma, Zhiyuan and Liang, Xinyue and Wu, Rongyuan and Zhu, Xiangyu and Lei, Zhen and Zhang, Lei},
+  journal={arXiv preprint arXiv:2503.21694},
+  year={2025}
+}
+```
 
 
 <!-- Acknowledgement -->
