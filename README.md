@@ -89,7 +89,7 @@ The README is currently under development. Please stay tuned for further updates
 If you find this work helpful, please consider citing our paper:
 ```
 @article{ma2025progressive,
-  title={Progressive Rendering Distillation: Adapting Stable Diffusion for Instant Text-to-Mesh Generation beyond 3D Training Data},
+  title={Progressive Rendering Distillation: Adapting Stable Diffusion for Instant Text-to-Mesh Generation without 3D Data},
   author={Ma, Zhiyuan and Liang, Xinyue and Wu, Rongyuan and Zhu, Xiangyu and Lei, Zhen and Zhang, Lei},
   journal={arXiv preprint arXiv:2503.21694},
   year={2025}
