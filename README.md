@@ -23,7 +23,7 @@
 <!-- Updates -->
 ## ⏩ Updates
 
-- **2025-03-13**: The paper is now available on Arxiv.
+- **2025-03-27**: The paper is now available on Arxiv.
 - **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
 
