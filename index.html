@@ -167,7 +167,7 @@
         <source src="./static/videos/scrolling_video_wall_compressed.mp4" type="video/mp4">
       </video>
       <h2 class="subtitle has-text-centered">
-        TL;DR: We adapt Stable Diffusion for 4-step text-to-mesh generation without needing 3D training data. Only 2.5% extra parameters are required.
+        TL;DR: We adapt Stable Diffusion for 4-step text-to-mesh generation without needing 3D data. Only 2.5% extra parameters are required.
       </h2>
     </div>
   </div>
@@ -202,12 +202,41 @@
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
         <h2 class="title is-3">Method</h2>
+        
+        <!-- 第一部分：Progressive Rendering Distillation -->
+        <h3 class="title is-4">Progressive Rendering Distillation</h3>
+        <div class="content has-text-centered">
+          <img src="./static/images/Adaptation_Scheme_v2.drawio 2.png" alt="Progressive Rendering Distillation" class="method-image" width="100%">
+        </div>
         <div class="content has-text-justified">
           <p>
-            Our method adapts pretrained Stable Diffusion models for 3D generation without using any 3D training data. We propose a novel training scheme called Progressive Rendering Distillation (PRD) that eliminates the need for 3D ground-truths by distilling knowledge from multi-view diffusion models.
+            We detail our proposed training scheme for adapting SD as a native 3D generator. Traditional adaptation approaches require preparing ground-truth 3D representations and their corresponding latents for each 3D sample in the dataset. However, this paradigm faces limitations in both the quantity and quality of available 3D representations, as existing 3D datasets lack sufficient high-quality data for training text-to-3D generators.
           </p>
           <p>
-            We implement a Parameter-Efficient Triplane Adapter (PETA) that adds only 2.5% trainable parameters to the frozen SD model, enabling efficient adaptation for 3D generation while maintaining the original capabilities of SD.
+            Pretrained SD models already possess denoising capabilities for image generation. Our goal is to modify the Markov chain by transforming SD's U-net and decoder into 3D generators, from which the 3D representations can be decoded. Our modification of the Markov chain differs from traditional diffusion model adaptation objectives, as it requires neither ground-truth latents nor their noise-diffused variants in the training process.
+          </p>
+          <p>
+            At the beginning of the Markov chain, the network takes random noise as input. At each step, the current state is used to estimate latent vector, which is then decoded to 3D output. The 3D output is used to render images at different camera views and receive supervision from multi-view teachers via score distillation. We name this training scheme Progressive Rendering Distillation (PRD). From the total timesteps, we select a decreasing sequence of timesteps to perform score distillation from multi-view teachers. This specialized gradient detachment strategy maintains good convergence while reducing GPU memory usage and preventing gradient explosion.
+          </p>
+        </div>
+        
+        <!-- 第二部分：Parameter-Efficient Triplane Adaptation -->
+        <h3 class="title is-4">Parameter-Efficient Triplane Adaptation and Distillation</h3>
+        <div class="content has-text-centered">
+          <img src="./static/images/Parameter-Efficient-Triplane-Adaptor_v3.drawio.png" alt="Parameter-Efficient Triplane Adaptation" class="method-image" width="100%">
+        </div>
+        <div class="content has-text-justified">
+          <p>
+            We demonstrate an exemplar solution using Triplanes as the representation. We denote our adapted model as <strong>TriplaneTurbo</strong>. Specifically, TriplaneTurbo adapts SD to generate a 3D representation consisting of two Triplanes: a geometry Triplane storing Signed Distance Function (SDF) and deformation values for mesh extraction, and a texture Triplane containing RGB attributes for painting texture on the mesh.
+          </p>
+          <p>
+            Unlike existing works that fully retrain SD, which can lead to catastrophic forgetting, we propose a parameter-efficient adaptation approach. The core of our design lies in the fact that each of the six feature planes maintains its own unique feature distribution. Therefore, plane-specific characteristics must be incorporated into the adaptation process. We name our approach <strong>Parameter-Efficient Triplane Adaptation (PETA)</strong>.
+          </p>
+          <p>
+            For the convolution blocks and cross-attention layers, we implement LoRA for parameter-efficient adaptation, and process the six planes uniformly. The plane-specific adaptations are then applied to the self-attention. For the self-attention blocks, we apply distinct LoRA layers to the linear layers when processing each of the six feature planes. This adaptation maintains low computational overhead while effectively introducing plane-specific processing. While this adaptation adds only 2.5% of the parameters to the SD model, it effectively enables native 3D generation.
+          </p>
+          <p>
+            Since PRD eliminates the need for 3D data by referring to multi-view teachers for distillation, using multiple teachers allows us to combine their strengths while mitigating individual biases. We integrate Stable Diffusion for its high-fidelity, text-consistent images, MVDream for addressing the Janus problem, and RichDreamer for providing direct supervision on geometry through normal and depth maps.
           </p>
         </div>
       </div>
