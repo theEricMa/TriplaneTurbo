@@ -1,4 +1,4 @@
-name: "TriplaneTurbo_v1_mem-96G_iters-20k"
+name: "TriplaneTurbo_v1"
 tag: "${rmspace:${data.prompt_library},_}"
 exp_root_dir: "outputs"
 seed: 0
@@ -55,9 +55,9 @@ system_type: "multiprompt-dual-renderer-multistep-generator-system"
 system:
   initialize_shape: false # #true #
   visualize_samples: false 
-  parallel_guidance: true # set true for speed-up when you have enough VRAM
+  parallel_guidance: false # set true for speed-up when you have enough VRAM
 
-  # gradient_accumulation_steps: 2 # to replace the accumulate_grad_batches because it is not supported in our method
+  # gradient_accumulation_steps: 1 # to replace the accumulate_grad_batches because it is not supported in our method
 
   num_parts_training: 4 # TBD
   num_steps_training: 4 # TBD
@@ -245,7 +245,7 @@ system:
 
 
 trainer:
-  max_steps: 500000
+  max_steps: 15000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 5000

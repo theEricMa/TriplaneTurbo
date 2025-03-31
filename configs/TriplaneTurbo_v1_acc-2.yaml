@@ -1,4 +1,4 @@
-name: "TriplaneTurbo_v1_mem-48G_iters-20k"
+name: "TriplaneTurbo_v1_acc-2"
 tag: "${rmspace:${data.prompt_library},_}"
 exp_root_dir: "outputs"
 seed: 0
@@ -245,7 +245,7 @@ system:
 
 
 trainer:
-  max_steps: 500000
+  max_steps: 30000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 5000

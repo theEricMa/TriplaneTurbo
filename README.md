@@ -65,12 +65,11 @@ Install major dependencies
 ```sh
 pip install -r requirements.txt
 ```
-Install iNGP and NerfAcc
+Install iNGP
 ```sh
 export PATH="/usr/local/cuda/bin:$PATH"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindingstorch
-pip install git+https://github.com/KAIR-BAIR/nerfacc.git@v0.5.2
+pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
 ```
 If you encounter errors while installing iNGP, it is recommended to check your gcc version. Follow these steps to change the gcc version within your -cconda environment. After that, return to the project directory and reinstall iNGP and NerfAcc:
 ```sh
@@ -80,9 +79,35 @@ ln -s  /usr/lib/x86_64-linux-gnu/libcuda.so./
 cd <your project directory>
 ```
 
+## 📊 Evaluation
+
+If you only want to run the evaluation without training, follow these steps:
+
+```sh
+# Download the model from HuggingFace
+huggingface-cli download --resume-download ZhiyuanthePony/TriplaneTurbo \
+    --include "triplane_turbo_sd_v1.pth" \
+    --local-dir ./pretrained \
+    --local-dir-use-symlinks False
+
+# Download evaluation assets
+python scripts/prepare/download_eval_only.py
+
+# Run evaluation script
+python evaluate.py --config configs/evaluation.yaml
+```
+
+Our evaluation metrics include:
+- FID (Fréchet Inception Distance)
+- CLIP Score
+- Mesh Quality Metrics (mesh consistency, surface smoothness)
+
+For detailed evaluation results, please refer to our paper.
 
 
-The README is currently under development. Please stay tuned for further updates.
+
+
+
 
 <!-- Citation -->
 ## 📜 Citation
