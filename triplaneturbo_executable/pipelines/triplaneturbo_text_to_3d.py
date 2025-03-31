@@ -215,14 +215,24 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
             text_embeddings: Text embeddings tensor.
         """
         # Use base_pipeline to encode prompt
-        text_embeddings = self.base_pipeline.encode_prompt(
-            prompt=prompt,
-            device=device,
-            num_images_per_prompt=num_results_per_prompt,
-            do_classifier_free_guidance=False,
-            negative_prompt=None
-        )
-        return text_embeddings
+        try:
+            text_embeddings = self.base_pipeline.encode_prompt(
+                prompt=prompt,
+                device=device,
+                num_images_per_prompt=num_results_per_prompt,
+                do_classifier_free_guidance=False,
+                negative_prompt=None
+            )
+            return text_embeddings
+        except:  # diffusers 0.20.0
+            text_embeddings = self.base_pipeline._encode_prompt(
+                prompt=prompt,
+                device=device,
+                num_images_per_prompt=num_results_per_prompt,
+                do_classifier_free_guidance=False,
+                negative_prompt=None
+            )
+            return text_embeddings, None
         
     @torch.no_grad()
     def __call__(
