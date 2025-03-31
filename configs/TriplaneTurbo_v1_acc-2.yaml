@@ -1,4 +1,4 @@
-name: "TriplaneTurbo_v1_acc-2"
+name: "TriplaneTurbo_v1"
 tag: "${rmspace:${data.prompt_library},_}"
 exp_root_dir: "outputs"
 seed: 0

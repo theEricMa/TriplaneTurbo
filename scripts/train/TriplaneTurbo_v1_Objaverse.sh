@@ -23,7 +23,7 @@
 #     data.condition_processor.cache_dir=".threestudio_cache/text_embeddings_3DTopia_361k" \
 #     data.guidance_processor.cache_dir=".threestudio_cache/text_embeddings_3DTopia_361k" 
 
-CUDA_VISIBLE_DEVICES=0 python launch.py \
+CUDA_VISIBLE_DEVICES=3 python launch.py \
     --config configs/TriplaneTurbo_v1_acc-2.yaml  \
     --train \
     data.prompt_library="3DTopia_361k_prompt_library" \

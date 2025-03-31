@@ -37,3 +37,6 @@ scikit-learn
 # diffmc
 diso
 einops
+
+# for evaluation
+git+https://github.com/ashawkey/kiuikit.git

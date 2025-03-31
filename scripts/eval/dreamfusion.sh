@@ -32,8 +32,11 @@ CUDA_VISIBLE_DEVICES=$GPUS python launch.py \
     data.prompt_library="dreamfusion_415_prompt_library" \
     system.exporter.fmt=obj
 
-SAVE_DIR=outputs/TriplaneTurbo_v1_mem-48G_iters-20k/dreamfusion_415_prompt_library/save/it0-4views
-OBJ_DIR=outputs/TriplaneTurbo_v1_mem-48G_iters-20k/dreamfusion_415_prompt_library/save/it0-export
+# set the path of the saved directory and the exported directory
+#if you are using single GPU, the output folder will be [exp_root_dir]/[name]/[tag]@[timestamp]
+# which has a timestamp in the name
+SAVE_DIR=outputs/TriplaneTurbo_v1/dreamfusion_415_prompt_library/save/it0-4views
+OBJ_DIR=outputs/TriplaneTurbo_v1/dreamfusion_415_prompt_library/save/it0-export
 
 # Run visualization using the specified GPUs
 python evaluation/mesh_visualize.py \
