@@ -94,7 +94,7 @@ huggingface-cli download --resume-download ZhiyuanthePony/TriplaneTurbo \
 python scripts/prepare/download_eval_only.py
 
 # Run evaluation script
-bash scripts/eval/dreamfusion.sh --gpu 0,1 # can be more, e.x 0,1,2,3,4,5,6,7
+bash scripts/eval/dreamfusion.sh --gpu 0,1 # You can use more GPUs (e.g. 0,1,2,3,4,5,6,7). For single GPU usage, please check the script for required modifications
 ```
 
 Our evaluation metrics include:

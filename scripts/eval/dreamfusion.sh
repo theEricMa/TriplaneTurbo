@@ -43,7 +43,6 @@ python evaluation/mesh_visualize.py \
     $OBJ_DIR \
     --save_dir $SAVE_DIR \
     --gpu $GPUS \
-    --debug $([ "$GPUS" == "0" ] && echo "True" || echo "False")
 
 # Compute metrics
 python evaluation/clipscore/compute.py \

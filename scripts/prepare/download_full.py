@@ -17,3 +17,11 @@ os.system(cmd)
 
 cmd = "wget https://virutalbuy-public.oss-cn-hangzhou.aliyuncs.com/share/RichDreamer/nd_mv_ema.ckpt -O ./pretrained/nd_mv_ema.ckpt"
 os.system(cmd)
+
+# get the text prompt dataset
+cmd = "wget https://huggingface.co/datasets/ZhiyuanthePony/TriplaneTrubo/resolve/main/3DTopia_prompt_library.json?download=true -O ./datasets/3DTopia_prompt_library.json"
+os.system(cmd)
+
+
+cmd = "wget https://huggingface.co/datasets/ZhiyuanthePony/TriplaneTrubo/resolve/main/DALLE_Midjourney_prompt_library.json?download=true -O ./datasets/DALLE_Midjourney_prompt_library.json"
+os.system(cmd)

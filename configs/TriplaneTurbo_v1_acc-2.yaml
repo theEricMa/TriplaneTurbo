@@ -123,8 +123,8 @@ system:
     enable_bg_rays: true
     allow_empty_flag: false
 
-    sdf_grad_shrink: 0. # sdf is not optimized w.r.t. the rasterizer
-    def_grad_shrink: 1 # def is optimized
+    sdf_grad_shrink: 0.001 # sdf is not optimized w.r.t. the rasterizer
+    def_grad_shrink: 0.001 # def is optimized
 
 
   renderer_2nd_type: patch-renderer
@@ -158,7 +158,7 @@ system:
     mv_model_name_or_path: "sd-v2.1-base-4view"
     mv_ckpt_path: "pretrained/sd-v2.1-base-4view.pt" 
     mv_weight: 1.
-    mv_guidance_scale: 20 #7.5
+    mv_guidance_scale: [0, 20., 10., 20000]
     mv_weighting_strategy: "dmd"
 
     # the following are specific to RD

@@ -599,7 +599,7 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
                 is_dual=is_dual,
             )
 
-        noise_pred_first = noise_pred_uncond + self.cfg.mv_guidance_scale * (
+        noise_pred_first = noise_pred_uncond + self.mv_guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
         noise_pred_second = noise_pred_text_second
@@ -1792,3 +1792,5 @@ class RDMVASDsynchronousScoreDistillationGuidance(BaseObject):
             if self.cfg.mv_min_step_percent is not None else min_step
         self.mv_max_step = int(self.num_train_timesteps * C(self.cfg.mv_max_step_percent, epoch, global_step)) \
             if self.cfg.mv_max_step_percent is not None else max_step
+        
+        self.mv_guidance_scale = C(self.cfg.mv_guidance_scale, epoch, global_step)

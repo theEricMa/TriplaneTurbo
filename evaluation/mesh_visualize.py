@@ -72,7 +72,6 @@ if __name__ == '__main__':
     parser.add_argument('--save_dir', default='ours_dreamfusion_objs', type=str)
     parser.add_argument('--num_views', default=4, type=int)
     parser.add_argument('--requires_normal', default=False, type=bool)
-    parser.add_argument('--debug', default=False, type=bool, help='Whether to run in debug mode')
     args = parser.parse_args()
 
     files = glob.glob(f'{args.dir}/*/*.obj')
@@ -88,9 +87,5 @@ if __name__ == '__main__':
     # for task in tasks:
     #     process_file(task)
 
-    if args.debug:
-        for task in tasks:
-            process_file(task)
-    else:
-        with Pool() as pool:
-            pool.map(process_file, tasks)
+    with Pool() as pool:
+        pool.map(process_file, tasks)
