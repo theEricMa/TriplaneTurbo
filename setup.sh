@@ -44,7 +44,7 @@ pip install "transformers==4.36.1"
 
 
 echo "Installing gradio..."
-pip install "gradio==2.9.4"
+pip install "gradio==3.0.11"
 
 echo "Installing einops..."
 pip install einops
