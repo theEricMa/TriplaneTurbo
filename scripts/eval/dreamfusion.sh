@@ -1,6 +1,6 @@
 
 CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7  python launch.py \
-    --config configs/v1_mem-48G_iters-20k.yaml \
+    --config configs/TriplaneTurbo_v1_acc-2.yaml \
     --export \
     system.exporter_type="multiprompt-mesh-exporter" \
     system.weights="pretrained/triplane_turbo_sd_v1.pth" \

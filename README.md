@@ -75,7 +75,7 @@ If you encounter errors while installing iNGP, it is recommended to check your g
 ```sh
 conda install -c conda-forge gxx=9.5.0
 cd  $CONDA_PREFIX/lib
-ln -s  /usr/lib/x86_64-linux-gnu/libcuda.so./
+ln -s  /usr/lib/x86_64-linux-gnu/libcuda.so ./
 cd <your project directory>
 ```
 
@@ -94,16 +94,39 @@ huggingface-cli download --resume-download ZhiyuanthePony/TriplaneTurbo \
 python scripts/prepare/download_eval_only.py
 
 # Run evaluation script
-python evaluate.py --config configs/evaluation.yaml
+sh scripts/eval/dreamfusion.sh
 ```
 
 Our evaluation metrics include:
-- FID (Fréchet Inception Distance)
-- CLIP Score
-- Mesh Quality Metrics (mesh consistency, surface smoothness)
+- CLIP Similarity Score
+- CLIP Recall@1
 
 For detailed evaluation results, please refer to our paper.
 
+If you want to evaluate your own model, use the following script:
+```sh
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python launch.py \
+    --config <path_to_your_exp_config> \
+    --export \
+    system.exporter_type="multiprompt-mesh-exporter" \
+    resume=<path_to_your_ckpt> \
+    data.prompt_library="dreamfusion_415_prompt_library" \
+    system.exporter.fmt=obj
+```
+
+After running the script, you will find generated OBJ files in `outputs/<your_exp>/dreamfusion_415_prompt_library/save/<itXXXXX-export>`. Set this path as `<OBJ_DIR>`, and set `outputs/<your_exp>/dreamfusion_415_prompt_library/save/<itXXXXX-4views>` as `<VIEW_DIR>`. Then run:
+
+```sh
+SAVE_DIR=<VIEW_DIR>
+python evaluation/mesh_visualize.py \
+    <OBJ_DIR> \
+    --save_dir $SAVE_DIR \
+    --gpu 0,1,2,3,4,5,6,7
+
+python evaluation/clipscore/compute.py \
+    --result_dir $SAVE_DIR
+```
+The evaluation results will be displayed in your terminal once the computation is complete.
 
 
 
