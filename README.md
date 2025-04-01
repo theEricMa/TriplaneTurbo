@@ -9,6 +9,9 @@
 
 </div>
 
+----
+
+
 > **Note:** This branch is specifically maintained to verify how the same evaluation code performs across different codebases. It allows us to analyze the impact of different implementation environments on evaluation metrics while keeping the evaluation code itself consistent.
 
 ## 🛠️ Official Installation
@@ -17,7 +20,7 @@ For installation instructions, please refer to the [main branch](https://github.
 
 ## 📊 Evaluation
 
-Same as in the main branch, follow these steps:
+Same as in the main branch,follow these steps:
 
 ```sh
 # Download the model from HuggingFace
