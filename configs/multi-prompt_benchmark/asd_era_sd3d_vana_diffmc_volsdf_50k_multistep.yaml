@@ -1,0 +1,251 @@
+name: "asd_era_sd3d_vana_diffmc_volsdf_50k_multistep"
+tag: "${rmspace:${data.image_library},_}"
+exp_root_dir: "outputs_13"
+seed: 0
+
+data_type: "multiview-multiimage-dualrenderer-multistep-datamodule-v2-wonder3D"
+data:
+  batch_size: 6 # should be the multiple of n_views
+  n_view: 6
+  # 0-4999: 64x64, >=5000: 512x512
+  # this drastically reduces VRAM usage as empty space is pruned in early training
+  width: 512
+  height: 512 # so high resolution !!
+  ray_height: 128
+  ray_width: 128
+  # unsupervised data
+  image_root_dir: ???
+  image_library: ???
+  unsup_elevation_range: [0, 0]
+  unsup_azimuth_list: [0, 45, 90, 180, 270, 315] # 6 views
+  unsup_camera_distance_list: [2, 1.414, 2, 2, 2 , 1.414] 
+  eval_camera_distance: 2
+  # eval_fovy_deg: 40. # not used
+  n_val_views: 40
+  n_test_views: 120
+  # supervised data
+  obj_library: "none"
+  meta_json: "none"
+  rgb_data_dir: "none"
+  normal_data_dir: "none"
+  depth_data_dir: "none"
+  camera_data_dir: "none"
+  frontal_idx: 24 # 24 is the frontal view
+  # the sup / unsup ratio, for training
+  sup_unsup_mode: "vanilla" # "vanilla"
+  dim_gaussian: [6, 4, 32, 32] 
+  pure_zeros: false
+  # for training
+  n_steps: ${system.num_parts_training}
+
+  guidance_processor_type: "sd-unclip-multi-reference-processor-callable"
+  guidance_processor:
+    spawn: True # if True, the process will be parallelized and accelerated
+    pretrained_model_name_or_path: "pretrained/Era3D-512-6view" #
+    image_root_dir: ${data.image_root_dir}
+    use_latent: True
+    use_embed_global: True
+    use_embed_local: True
+    image_size: [512, 512]
+    crop_size: 420 # same as Era3D
+
+  condition_processor_type: "sd-unclip-multi-reference-processor-callable"
+  condition_processor:
+    spawn: True # if True, the process will be parallelized and accelerated
+    pretrained_model_name_or_path: "pretrained/stable-diffusion-2-1-unclip"
+    image_root_dir: ${data.image_root_dir}
+    use_latent: False # important for hexa
+    use_embed_global: True
+    use_embed_local: True
+    image_size: [256, 256]
+    crop_size: 192 # same as wonder3D
+
+
+system_type: "multiimage-dual-renderer-multistep-generator-system"
+system:
+  initialize_shape: false # #true #
+  visualize_samples: false 
+  parallel_guidance: false
+
+  # gradient_accumulation_steps: 2 # to replace the accumulate_grad_batches because it is not supported in our method
+
+  # multi-step trianing / inference
+  num_parts_training: 4 # TBD
+  num_steps_training: 4 # TBD
+  num_steps_sampling: 4
+  noise_scheduler: "ddpm" 
+  sample_scheduler: "ddim" 
+
+  scheduler_dir: ${system.geometry.space_generator_config.pretrained_model_name_or_path}
+  specifiy_guidance_timestep: null # any of null, v1
+
+  geometry_type: "image-to-triplane-dual-stable-diffusion"
+  geometry:
+    radius: 1. 
+    normal_type: "analytic"
+
+    sdf_bias: sphere
+    sdf_bias_params: 0.5 # a small bias will be fine?
+
+    rotate_planes: v1
+    split_channels: v1 # v1: split channels for geometry and texture triplanes
+
+    geo_interpolate: v1
+    tex_interpolate: v2
+
+    space_generator_config:
+      pretrained_model_name_or_path: "pretrained/stable-diffusion-2-1-unclip"
+      training_type: "self_lora_rank_16-cross_lora_rank_16-locon_rank_16" 
+      timestep: 999
+      output_dim: 32
+      # gradient_checkpoint: true
+      self_lora_type: "hexa_v1" #
+      cross_lora_type: "vanilla"
+      locon_type: "vanilla_v1"
+      vae_attn_type: "basic" # "basic", "vanilla"
+
+    isosurface_deformable_grid: true
+
+
+  material_type: no-material
+  material:
+    n_output_dims: 3
+    requires_normal: true
+    color_activation: sigmoid-mipnerf # follow OpenLRM
+
+
+  background_type: "solid-color-background"
+  background:
+    random_aug: false
+    eval_color: [1., 1., 1.]
+    learned: true
+    color: [0.8, 0.8, 0.8]
+    # learned: false
+    # color: [1., 1., 1.]
+
+  renderer_type: generative-space-dmtet-rasterize-renderer
+  renderer:
+    radius: ${system.geometry.radius}
+    isosurface_remove_outliers: false
+    isosurface_method: "diffmc"
+    enable_bg_rays: true
+    allow_empty_flag: false
+
+    sdf_grad_shrink: 0. # sdf is not optimized w.r.t. the rasterizer
+    def_grad_shrink: 1. # def is optimized, but start from as small as 0
+
+    normal_direction: "front"  # "front" or "camera" or "world"
+
+
+
+  renderer_2nd_type: patch-renderer
+  renderer_2nd:
+    base_renderer_type: generative-space-volsdf-volume-renderer
+    base_renderer:
+      radius: ${system.geometry.radius}
+      use_volsdf: false
+      trainable_variance: false # important!
+      learned_variance_init: 0.4605  # 0.4605 = log(100) / 10, 100 is the most common variance across the prompts
+      
+      rgb_grad_shrink: [0, 1, 0.01, 20000]
+
+      estimator: importance
+      num_samples_per_ray: 64
+      num_samples_per_ray_importance: 128
+
+      near_plane: 0.1
+      far_plane: 4.0
+      train_chunk_size: 0 #100000
+    patch_size: 40  # 40 * 40 = 1600
+    global_downsample: 3 # 128 / 3 ~= 42, 42*42=1764, 
+    # 1600 + 1764 = 3364 < 4096 = 64 * 64
+
+  guidance_type: "Era3D-asynchronous-score-distillation-guidance"
+  guidance:
+    n_view: ${data.n_view}
+
+    # related to asynchonous score distillation
+    era3d_plus_random: true
+    era3d_plus_ratio: 0.
+
+    # general settings
+    era3d_min_step_percent: [0, 0.97, 0.02, 5000]
+    era3d_max_step_percent: 0.98
+    era3d_guidance_scale_color: 3.
+    era3d_guidance_scale_normal: 5.
+
+    # related to the guidance weight specificly introduced to era3d
+    era3d_normal_weight: 1. #[0, 0., 1., 20000] #the training is unstable if the weight is 1 forever
+    era3d_color_weight: 1.
+
+    # related to dmd weighting strategy
+    eps: 0.1
+
+    # to save memory
+    auto_grad: true
+    gradient_checkpoint: true
+
+    # half_precision_weights: false
+
+
+  loggers:
+    wandb:
+      enable: false
+      project: "threestudio"
+      name: None
+
+  loss:
+    weighting_strategy: "v1" 
+
+    lambda_asd: 1.
+    lambda_orient: 0.
+    lambda_sparsity: 0
+    lambda_opaque: 0 
+    lambda_z_variance: 0.
+    lambda_eikonal: 0.
+    lambda_normal_consistency: 0.
+    lambda_laplacian_smoothness: 0.
+    lambda_normal_smoothness_2d: 0.
+    lambda_sdf_abs: 0.
+
+    lambda_asd_2nd: 1.
+    lambda_orient_2nd: 0.
+    lambda_sparsity_2nd: 1.
+    lambda_opaque_2nd: 0. 
+    lambda_z_variance_2nd: 0.
+    lambda_eikonal_2nd: 100.
+    lambda_normal_consistency_2nd: 0.
+    lambda_laplacian_smoothness_2nd: 0.
+    lambda_normal_smoothness_2d_2nd: 0. 
+    lambda_sdf_abs_2nd: 0. # should not be used!
+
+  optimizer:
+    name: Adan # for fast convergence
+    args:
+      betas: [0.98, 0.92, 0.99]
+      eps: 1.e-15
+    params:
+      geometry:
+        lr: 0.0002 # 0.002
+      background:
+        lr: 0.0002 # 0.002
+      # renderer_2nd:
+      #   lr: 0.0002 # 0.002
+
+
+trainer:
+  max_steps: 500000
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  val_check_interval: 1000
+  # check_val_every_n_epoch: 1000
+  enable_progress_bar: true
+  precision: 32
+  strategy: "ddp" # "deepspeed_stage_2"
+  # accumulate_grad_batches: 1 # > 1 is not supported
+
+checkpoint:
+  save_last: true
+  save_top_k: -1
+  every_n_train_steps: ${trainer.val_check_interval}
+  # every_n_epochs: ${trainer.check_val_every_n_epoch}

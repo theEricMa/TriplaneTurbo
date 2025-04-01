@@ -1,0 +1,1 @@
+python evaluation/CLIP/evaluation_amortized.py --result_dir outputs_3/3DTopia__base_step_4__asd_mv+rd+sd_volsdf+diffmc_grad_01__triple_32_vanilla_32_none_lora_prompt_v2/3DTopia_361k_prompt_library/save/it55170-val-1st
