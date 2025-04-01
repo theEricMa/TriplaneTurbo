@@ -1,32 +1,31 @@
 import json
 import os
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from itertools import cycle
 
 import torch
+import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
+from torch.multiprocessing import Pool
+from tqdm import tqdm
 
 import threestudio
-from threestudio.utils.base import BaseObject
-from threestudio.utils.typing import *
-from threestudio.utils.misc import barrier, cleanup
-
-from tqdm import tqdm
-from collections import OrderedDict
-
 from threestudio.models.prompt_processors.base import (
-    DirectionConfig, shift_azimuth_deg, PromptProcessorOutput,
-    shifted_expotional_decay
+    DirectionConfig,
+    PromptProcessorOutput,
+    shift_azimuth_deg,
+    shifted_expotional_decay,
 )
-from threestudio.utils.misc import get_rank
-from torch.multiprocessing import Pool
-import torch.distributed as dist
+from threestudio.utils.base import BaseObject
+from threestudio.utils.misc import barrier, cleanup, get_rank
+from threestudio.utils.typing import *
 
-from concurrent.futures import ThreadPoolExecutor
-from itertools import cycle
 from .utils import _load_prompt_embedding, hash_prompt
-from concurrent.futures import ThreadPoolExecutor,as_completed
+
 
 class MultiPromptProcessor(BaseObject):
     @dataclass
@@ -74,13 +73,14 @@ class MultiPromptProcessor(BaseObject):
         # # index of words that can potentially be removed
         # prompt_debiasing_mask_ids: Optional[List[int]] = None
         use_local_text_embeddings: bool = False
-        use_view_dependent_text_embeddings: Optional[List[str]] = None #field(default_factory=lambda: [])
+        use_view_dependent_text_embeddings: Optional[
+            List[str]
+        ] = None  # field(default_factory=lambda: [])
 
         # whether to split the text embeddings across GPUs
         gpu_split: bool = True
 
     cfg: Config
-
 
     @rank_zero_only
     def configure_text_encoder(self) -> None:
@@ -89,14 +89,13 @@ class MultiPromptProcessor(BaseObject):
     @rank_zero_only
     def destroy_text_encoder(self) -> None:
         raise NotImplementedError
-    
-    def configure(self) -> None:
 
+    def configure(self) -> None:
         rank = get_rank()
         num_gpus = torch.cuda.device_count()
-        
+
         self._cache_dir = self.cfg.cache_dir
-        
+
         # view-dependent text embeddings, same as in stable_diffusion_prompt_processor.py
         self.directions: List[DirectionConfig]
 
@@ -173,10 +172,11 @@ class MultiPromptProcessor(BaseObject):
 
         if self.cfg.eval_prompt is None:
             # training
-            path = os.path.join(
-                self.cfg.prompt_library_dir, 
-                self.cfg.prompt_library) \
-                    + "." + self.cfg.prompt_library_format
+            path = (
+                os.path.join(self.cfg.prompt_library_dir, self.cfg.prompt_library)
+                + "."
+                + self.cfg.prompt_library_format
+            )
             with open(path, "r") as f:
                 prompt_library_json = json.load(f)
                 all_prompts = []
@@ -200,15 +200,18 @@ class MultiPromptProcessor(BaseObject):
             if self.cfg.eval_prompt_target is not None:
                 self.prompt_library.append(self.cfg.eval_prompt_target)
 
-
         # use provided negative prompt
         self.negative_prompt = self.cfg.negative_prompt
         if self.cfg.negative_prompt_2nd is not None:
             self.negative_prompt_2nd = self.cfg.negative_prompt_2nd
         threestudio.info(
-            f"Using prompt library located in [{self.cfg.prompt_library}] and negative prompt [{self.negative_prompt}]" +
-            (f" and 2nd negative prompt [{self.negative_prompt_2nd}]" if self.negative_prompt_2nd is not None else "")
-        )        
+            f"Using prompt library located in [{self.cfg.prompt_library}] and negative prompt [{self.negative_prompt}]"
+            + (
+                f" and 2nd negative prompt [{self.negative_prompt_2nd}]"
+                if self.negative_prompt_2nd is not None
+                else ""
+            )
+        )
 
         # view-dependent prompting
         self.prompts_vd = OrderedDict()
@@ -233,15 +236,21 @@ class MultiPromptProcessor(BaseObject):
         self.text_embeddings_vd = OrderedDict()
         self.global_text_embeddings = OrderedDict()
         self.local_text_embeddings = OrderedDict()
-        
+
         # load text embeddings from disk to memory, only allow one gpu to load
         self.load_text_embeddings()
 
     @staticmethod
-    def spawn_func(pretrained_model_name_or_path, prompts, cache_dir, tokenizer = None, text_encoder = None):
+    def spawn_func(
+        pretrained_model_name_or_path,
+        prompts,
+        cache_dir,
+        tokenizer=None,
+        text_encoder=None,
+    ):
         raise NotImplementedError
-    
-    #@rank_zero_only, deprecated when each process has its own cache
+
+    # @rank_zero_only, deprecated when each process has its own cache
     def prepare_text_embeddings(self):
         os.makedirs(self._cache_dir, exist_ok=True)
 
@@ -260,7 +269,6 @@ class MultiPromptProcessor(BaseObject):
             all_prompts += self.negative_prompt_2nd
             all_prompts += self.negative_prompts_vd_2nd
 
-
         prompts_to_process = []
         for prompt in all_prompts:
             if self.cfg.use_cache:
@@ -271,12 +279,14 @@ class MultiPromptProcessor(BaseObject):
                     f"{hash_prompt(self.cfg.pretrained_model_name_or_path, prompt, 'global')}.pt",
                 )
 
-                cache_path_local = os.path.join(    
+                cache_path_local = os.path.join(
                     self._cache_dir,
                     f"{hash_prompt(self.cfg.pretrained_model_name_or_path, prompt, 'local')}.pt",
                 )
 
-                if os.path.exists(cache_path_global) and os.path.exists(cache_path_local):
+                if os.path.exists(cache_path_global) and os.path.exists(
+                    cache_path_local
+                ):
                     threestudio.debug(
                         f"Text embeddings for model {self.cfg.pretrained_model_name_or_path} and prompt [{prompt}] are already in cache, skip processing."
                     )
@@ -284,9 +294,9 @@ class MultiPromptProcessor(BaseObject):
             prompts_to_process.append(prompt)
 
         if len(prompts_to_process) > 0:
-
             # load tokenizer and text encoder for multiprocessing
             from transformers import AutoTokenizer, CLIPTextModel
+
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
             tokenizer = AutoTokenizer.from_pretrained(
                 self.cfg.pretrained_model_name_or_path, subfolder="tokenizer"
@@ -298,7 +308,9 @@ class MultiPromptProcessor(BaseObject):
             )
 
             if self.cfg.spawn:
-                threestudio.info(f"Spawning {len(prompts_to_process)} processes to process prompts.")
+                threestudio.info(
+                    f"Spawning {len(prompts_to_process)} processes to process prompts."
+                )
                 # multiprocessing
                 ctx = mp.get_context("spawn")
                 subprocess = ctx.Process(
@@ -317,20 +329,19 @@ class MultiPromptProcessor(BaseObject):
             else:
                 # single process
                 from tqdm import tqdm
+
                 for prompt in tqdm(prompts_to_process, desc="Processing prompts"):
                     self.spawn_func(
                         self.cfg.pretrained_model_name_or_path,
                         prompt,
                         self._cache_dir,
-                        tokenizer, 
+                        tokenizer,
                         text_encoder,
                     )
-
 
             del tokenizer
             del text_encoder
             cleanup()
-
 
     def load_text_embeddings(self):
         # synchronize, to ensure the text embeddings have been computed and saved to cache
@@ -352,20 +363,31 @@ class MultiPromptProcessor(BaseObject):
 
         if is_distributed:
             # Use ThreadPoolExecutor to parallelize the loading of embeddings
-            with ThreadPoolExecutor(max_workers=4) as executor: # hard-coded max_workers
+            with ThreadPoolExecutor(
+                max_workers=4
+            ) as executor:  # hard-coded max_workers
                 # Use as_completed to retrieve the results as they are completed
                 futures = {
-                        executor.submit(_load_prompt_embedding, args): args for args \
-                            in zip(
-                                prompt,
-                                prompt_vds,
-                                cycle([self._cache_dir]),
-                                cycle([self.cfg.pretrained_model_name_or_path]),
-                            )
-                    }
-                for future in tqdm(as_completed(futures), desc="Loading text embeddings in {}".format(rank), total=len(prompt)):
+                    executor.submit(_load_prompt_embedding, args): args
+                    for args in zip(
+                        prompt,
+                        prompt_vds,
+                        cycle([self._cache_dir]),
+                        cycle([self.cfg.pretrained_model_name_or_path]),
+                    )
+                }
+                for future in tqdm(
+                    as_completed(futures),
+                    desc="Loading text embeddings in {}".format(rank),
+                    total=len(prompt),
+                ):
                     data = future.result()
-                    p, global_text_embeddings, local_text_embeddings, text_embeddings_vd = data
+                    (
+                        p,
+                        global_text_embeddings,
+                        local_text_embeddings,
+                        text_embeddings_vd,
+                    ) = data
                     self.global_text_embeddings[p] = global_text_embeddings
                     self.local_text_embeddings[p] = local_text_embeddings
                     self.text_embeddings_vd[p] = text_embeddings_vd
@@ -382,38 +404,40 @@ class MultiPromptProcessor(BaseObject):
                     ),
                 ),
                 desc="Loading text embeddings for GPU: {}".format(rank)
-                    if is_distributed else "Loading text embeddings",
+                if is_distributed
+                else "Loading text embeddings",
                 total=len(prompt),
             ):
-                p, global_text_embeddings, local_text_embeddings, text_embeddings_vd = data
+                (
+                    p,
+                    global_text_embeddings,
+                    local_text_embeddings,
+                    text_embeddings_vd,
+                ) = data
                 self.global_text_embeddings[p] = global_text_embeddings
                 self.local_text_embeddings[p] = local_text_embeddings
                 self.text_embeddings_vd[p] = text_embeddings_vd
 
-
-
         barrier()
         threestudio.debug(f"Loaded text embeddings.")
-        
 
-        
     def get_text_embeddings(
         self, prompt: Union[str, List[str]], negative_prompt: Union[str, List[str]]
     ) -> Tuple[Float[Tensor, "B ..."], Float[Tensor, "B ..."]]:
         raise NotImplementedError
-    
+
     def __call__(
         self,
         prompt: Union[str, List[str]],
     ) -> PromptProcessorOutput:
         if isinstance(prompt, str):
             prompt = [prompt]
-        
+
         # check if the prompt is in the prompt library
         for p in prompt:
             if p not in self.prompt_library:
                 raise ValueError(f"Prompt [{p}] is not in the prompt library.")
-        
+
         prompt_args = {
             "global_text_embeddings": [self.global_text_embeddings[p] for p in prompt],
             "local_text_embeddings": [self.local_text_embeddings[p] for p in prompt],
@@ -423,8 +447,12 @@ class MultiPromptProcessor(BaseObject):
         }
         # 2nd negative prompt
         if self.negative_prompt_2nd is not None:
-            prompt_args["uncond_text_embeddings_2nd"] = self.local_text_embeddings[self.negative_prompt_2nd]
-            prompt_args["uncond_text_embeddings_vd_2nd"] = self.text_embeddings_vd[self.negative_prompt_2nd]
+            prompt_args["uncond_text_embeddings_2nd"] = self.local_text_embeddings[
+                self.negative_prompt_2nd
+            ]
+            prompt_args["uncond_text_embeddings_vd_2nd"] = self.text_embeddings_vd[
+                self.negative_prompt_2nd
+            ]
 
         direction_args = {
             "directions": self.directions,
@@ -459,7 +487,8 @@ class MultiPromptProcessor(BaseObject):
         #         use_local_text_embeddings=self.cfg.use_local_text_embeddings
         #     )
         return obj
-        
+
+
 @dataclass
 class MultiPromptProcessorOutput:
     global_text_embeddings: List[Float[Tensor, "B ..."]]
@@ -480,12 +509,10 @@ class MultiPromptProcessorOutput:
     uncond_text_embeddings_2nd: Optional[Float[Tensor, "B ..."]] = None
     uncond_text_embeddings_vd_2nd: Optional[Float[Tensor, "B ..."]] = None
 
-
     def get_global_text_embeddings(
         self,
         use_local_text_embeddings: Optional[bool] = None,
     ):
-
         if use_local_text_embeddings is None:
             use_local_text_embeddings = self.use_local_text_embeddings
 
@@ -494,36 +521,37 @@ class MultiPromptProcessorOutput:
                 return torch.stack(self.local_text_embeddings, dim=0).to(self.device)
             else:
                 feature_list_batch = []
-                for prompt_vd, prompt in zip(self.text_embeddings_vd, self.local_text_embeddings):
+                for prompt_vd, prompt in zip(
+                    self.text_embeddings_vd, self.local_text_embeddings
+                ):
                     feature_list = []
                     for view in self.use_view_dependent_text_embeddings:
-                        assert view in ["front", "side", "back", "overhead", "none"], f"Invalid view-dependent text embeddings: {view}"
-                        if view == "none": # special case for not using view-dependent text embeddings
-                            feature_list.append(
-                                prompt
-                            )
+                        assert view in [
+                            "front",
+                            "side",
+                            "back",
+                            "overhead",
+                            "none",
+                        ], f"Invalid view-dependent text embeddings: {view}"
+                        if (
+                            view == "none"
+                        ):  # special case for not using view-dependent text embeddings
+                            feature_list.append(prompt)
                         else:
                             direction_idx = self.direction2idx[view]
-                            feature_list.append(
-                                prompt_vd[direction_idx]
-                            )
-                    feature_list_batch.append(
-                        torch.stack(
-                            feature_list, 
-                            dim=0
-                        )
-                    )
+                            feature_list.append(prompt_vd[direction_idx])
+                    feature_list_batch.append(torch.stack(feature_list, dim=0))
                 return torch.stack(feature_list_batch, dim=0).to(self.device)
         else:
             return torch.stack(self.global_text_embeddings, dim=0).to(self.device)
-        
+
             # if not self.use_view_dependent_text_embeddings:
             #     return torch.stack(self.global_text_embeddings, dim=0).to(self.device)
             # else:
             #     raise NotImplementedError("View-dependent text embeddings are not supported yet.")
 
     def get_text_embeddings(
-        self, 
+        self,
         elevation: Float[Tensor, "B"],
         azimuth: Float[Tensor, "B"],
         camera_distances: Float[Tensor, "B"],
@@ -534,7 +562,7 @@ class MultiPromptProcessorOutput:
 
         if view_dependent_prompting:
             # Get direction
-            direction_idx = torch.zeros_like(elevation, dtype=torch.long).to('cpu')
+            direction_idx = torch.zeros_like(elevation, dtype=torch.long).to("cpu")
             for d in self.directions:
                 direction_idx[
                     d.condition(elevation, azimuth, camera_distances)
@@ -551,7 +579,9 @@ class MultiPromptProcessorOutput:
             uncond_text_embeddings = self.uncond_text_embeddings_vd[direction_idx]
             # 2nd negative prompt
             if use_2nd_uncond:
-                uncond_text_embeddings = self.uncond_text_embeddings_vd_2nd[direction_idx]
+                uncond_text_embeddings = self.uncond_text_embeddings_vd_2nd[
+                    direction_idx
+                ]
         else:
             text_embeddings = torch.stack(
                 [self.local_text_embeddings[i] for i in range(batch_size)], dim=0
@@ -561,12 +591,14 @@ class MultiPromptProcessorOutput:
             )
             # 2nd negative prompt
             if use_2nd_uncond:
-                uncond_text_embeddings = self.uncond_text_embeddings_2nd.unsqueeze(0).expand(
-                    batch_size, -1, -1
-                )
+                uncond_text_embeddings = self.uncond_text_embeddings_2nd.unsqueeze(
+                    0
+                ).expand(batch_size, -1, -1)
 
         # IMPORTANT: we return (cond, uncond), which is in different order than other implementations!
-        return torch.cat([text_embeddings, uncond_text_embeddings], dim=0).to(self.device)
+        return torch.cat([text_embeddings, uncond_text_embeddings], dim=0).to(
+            self.device
+        )
 
     def get_text_embeddings_perp_neg(
         self,
@@ -586,12 +618,12 @@ class MultiPromptProcessorOutput:
         if guidance_scale_neg is None:
             guidance_scale_neg = -1
 
-        direction_idx = torch.zeros_like(elevation, dtype=torch.long).to('cpu')
+        direction_idx = torch.zeros_like(elevation, dtype=torch.long).to("cpu")
         for d in self.directions:
             direction_idx[
                 d.condition(elevation, azimuth, camera_distances)
             ] = self.direction2idx[d.name]
-        
+
         # 0 - side view
         # 1 - front view
         # 2 - back view
@@ -602,14 +634,13 @@ class MultiPromptProcessorOutput:
         neg_guidance_weights = []
         uncond_text_embeddings = []
 
-
         # similar to get_text_embeddings_perp_neg in stable_diffusion_prompt_processor.py
         for batch_idx in range(batch_size):
             # get direction
-            idx = direction_idx[batch_idx].to('cpu')
-            ele = elevation[batch_idx].to('cpu')
-            azi = azimuth[batch_idx].to('cpu')
-            dis = camera_distances[batch_idx].to('cpu')
+            idx = direction_idx[batch_idx].to("cpu")
+            ele = elevation[batch_idx].to("cpu")
+            azi = azimuth[batch_idx].to("cpu")
+            dis = camera_distances[batch_idx].to("cpu")
 
             # get text embeddings
             side_emb = self.text_embeddings_vd[batch_idx][0]
@@ -620,15 +651,21 @@ class MultiPromptProcessorOutput:
             # the following code is similar to stable_diffusion_prompt_processor.py
             azi = shift_azimuth_deg(azi)  # to (-180, 180)
             uncond_text_embeddings.append(
-                self.uncond_text_embeddings_vd[idx] if not use_2nd_uncond else self.uncond_text_embeddings_vd_2nd[idx]
+                self.uncond_text_embeddings_vd[idx]
+                if not use_2nd_uncond
+                else self.uncond_text_embeddings_vd_2nd[idx]
             )  # should be ""
             if idx.item() == 3:  # overhead view
                 pos_text_embeddings += [overhead_emb]
-                
+
                 # dummy
                 neg_text_embeddings += [
-                    self.uncond_text_embeddings_vd[idx] if not use_2nd_uncond else self.uncond_text_embeddings_vd_2nd[idx],
-                    self.uncond_text_embeddings_vd[idx] if not use_2nd_uncond else self.uncond_text_embeddings_vd_2nd[idx],
+                    self.uncond_text_embeddings_vd[idx]
+                    if not use_2nd_uncond
+                    else self.uncond_text_embeddings_vd_2nd[idx],
+                    self.uncond_text_embeddings_vd[idx]
+                    if not use_2nd_uncond
+                    else self.uncond_text_embeddings_vd_2nd[idx],
                 ]
                 neg_guidance_weights += [0.0, 0.0]
             else:  # interpolating views
@@ -641,8 +678,10 @@ class MultiPromptProcessorOutput:
                     )
                     neg_text_embeddings += [front_emb, side_emb]
                     neg_guidance_weights += [
-                        shifted_expotional_decay(*self.perp_neg_f_fs, r_inter) * guidance_scale_neg,
-                        shifted_expotional_decay(*self.perp_neg_f_sf, 1 - r_inter) * guidance_scale_neg,
+                        shifted_expotional_decay(*self.perp_neg_f_fs, r_inter)
+                        * guidance_scale_neg,
+                        shifted_expotional_decay(*self.perp_neg_f_sf, 1 - r_inter)
+                        * guidance_scale_neg,
                     ]
                 else:
                     # side-back interpolation
@@ -653,8 +692,10 @@ class MultiPromptProcessorOutput:
                     )
                     neg_text_embeddings += [side_emb, front_emb]
                     neg_guidance_weights += [
-                        shifted_expotional_decay(*self.perp_neg_f_sb, r_inter) * guidance_scale_neg,
-                        shifted_expotional_decay(*self.perp_neg_f_fsb, r_inter) * guidance_scale_neg,
+                        shifted_expotional_decay(*self.perp_neg_f_sb, r_inter)
+                        * guidance_scale_neg,
+                        shifted_expotional_decay(*self.perp_neg_f_fsb, r_inter)
+                        * guidance_scale_neg,
                     ]
 
         text_embeddings = torch.cat(

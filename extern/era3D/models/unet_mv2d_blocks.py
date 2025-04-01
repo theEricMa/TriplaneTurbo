@@ -16,17 +16,48 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import nn
-
-from diffusers.utils import is_torch_version, logging
-from diffusers.models.normalization import AdaGroupNorm
-from diffusers.models.attention_processor import Attention, AttnAddedKVProcessor, AttnAddedKVProcessor2_0
+from diffusers.models.attention_processor import (
+    Attention,
+    AttnAddedKVProcessor,
+    AttnAddedKVProcessor2_0,
+)
 from diffusers.models.dual_transformer_2d import DualTransformer2DModel
-from diffusers.models.resnet import Downsample2D, FirDownsample2D, FirUpsample2D, KDownsample2D, KUpsample2D, ResnetBlock2D, Upsample2D
-
-from diffusers.models.unet_2d_blocks import DownBlock2D, ResnetDownsampleBlock2D, AttnDownBlock2D, CrossAttnDownBlock2D, SimpleCrossAttnDownBlock2D, SkipDownBlock2D, AttnSkipDownBlock2D, DownEncoderBlock2D, AttnDownEncoderBlock2D, KDownBlock2D, KCrossAttnDownBlock2D
-from diffusers.models.unet_2d_blocks import UpBlock2D, ResnetUpsampleBlock2D, CrossAttnUpBlock2D, SimpleCrossAttnUpBlock2D, AttnUpBlock2D, SkipUpBlock2D, AttnSkipUpBlock2D, UpDecoderBlock2D, AttnUpDecoderBlock2D, KUpBlock2D, KCrossAttnUpBlock2D
-
+from diffusers.models.normalization import AdaGroupNorm
+from diffusers.models.resnet import (
+    Downsample2D,
+    FirDownsample2D,
+    FirUpsample2D,
+    KDownsample2D,
+    KUpsample2D,
+    ResnetBlock2D,
+    Upsample2D,
+)
+from diffusers.models.unet_2d_blocks import (
+    AttnDownBlock2D,
+    AttnDownEncoderBlock2D,
+    AttnSkipDownBlock2D,
+    AttnSkipUpBlock2D,
+    AttnUpBlock2D,
+    AttnUpDecoderBlock2D,
+    CrossAttnDownBlock2D,
+    CrossAttnUpBlock2D,
+    DownBlock2D,
+    DownEncoderBlock2D,
+    KCrossAttnDownBlock2D,
+    KCrossAttnUpBlock2D,
+    KDownBlock2D,
+    KUpBlock2D,
+    ResnetDownsampleBlock2D,
+    ResnetUpsampleBlock2D,
+    SimpleCrossAttnDownBlock2D,
+    SimpleCrossAttnUpBlock2D,
+    SkipDownBlock2D,
+    SkipUpBlock2D,
+    UpBlock2D,
+    UpDecoderBlock2D,
+)
+from diffusers.utils import is_torch_version, logging
+from torch import nn
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -61,8 +92,8 @@ def get_down_block(
     multiview_attention: bool = True,
     sparse_mv_attention: bool = False,
     selfattn_block: str = "custom",
-    mvcd_attention: bool=False,
-    use_dino: bool = False
+    mvcd_attention: bool = False,
+    use_dino: bool = False,
 ):
     # If attn head dim is not defined, we default it to the number of heads
     if attention_head_dim is None:
@@ -71,7 +102,11 @@ def get_down_block(
         )
         attention_head_dim = num_attention_heads
 
-    down_block_type = down_block_type[7:] if down_block_type.startswith("UNetRes") else down_block_type
+    down_block_type = (
+        down_block_type[7:]
+        if down_block_type.startswith("UNetRes")
+        else down_block_type
+    )
     if down_block_type == "DownBlock2D":
         return DownBlock2D(
             num_layers=num_layers,
@@ -119,7 +154,9 @@ def get_down_block(
         )
     elif down_block_type == "CrossAttnDownBlock2D":
         if cross_attention_dim is None:
-            raise ValueError("cross_attention_dim must be specified for CrossAttnDownBlock2D")
+            raise ValueError(
+                "cross_attention_dim must be specified for CrossAttnDownBlock2D"
+            )
         return CrossAttnDownBlock2D(
             num_layers=num_layers,
             transformer_layers_per_block=transformer_layers_per_block,
@@ -142,7 +179,9 @@ def get_down_block(
     # custom MV2D attention block
     elif down_block_type == "CrossAttnDownBlockMV2D":
         if cross_attention_dim is None:
-            raise ValueError("cross_attention_dim must be specified for CrossAttnDownBlockMV2D")
+            raise ValueError(
+                "cross_attention_dim must be specified for CrossAttnDownBlockMV2D"
+            )
         return CrossAttnDownBlockMV2D(
             num_layers=num_layers,
             transformer_layers_per_block=transformer_layers_per_block,
@@ -168,11 +207,13 @@ def get_down_block(
             sparse_mv_attention=sparse_mv_attention,
             selfattn_block=selfattn_block,
             mvcd_attention=mvcd_attention,
-            use_dino=use_dino
+            use_dino=use_dino,
         )
     elif down_block_type == "SimpleCrossAttnDownBlock2D":
         if cross_attention_dim is None:
-            raise ValueError("cross_attention_dim must be specified for SimpleCrossAttnDownBlock2D")
+            raise ValueError(
+                "cross_attention_dim must be specified for SimpleCrossAttnDownBlock2D"
+            )
         return SimpleCrossAttnDownBlock2D(
             num_layers=num_layers,
             in_channels=in_channels,
@@ -295,8 +336,8 @@ def get_up_block(
     multiview_attention: bool = True,
     sparse_mv_attention: bool = False,
     selfattn_block: str = "custom",
-    mvcd_attention: bool=False,
-    use_dino: bool = False  
+    mvcd_attention: bool = False,
+    use_dino: bool = False,
 ):
     # If attn head dim is not defined, we default it to the number of heads
     if attention_head_dim is None:
@@ -305,7 +346,9 @@ def get_up_block(
         )
         attention_head_dim = num_attention_heads
 
-    up_block_type = up_block_type[7:] if up_block_type.startswith("UNetRes") else up_block_type
+    up_block_type = (
+        up_block_type[7:] if up_block_type.startswith("UNetRes") else up_block_type
+    )
     if up_block_type == "UpBlock2D":
         return UpBlock2D(
             num_layers=num_layers,
@@ -336,7 +379,9 @@ def get_up_block(
         )
     elif up_block_type == "CrossAttnUpBlock2D":
         if cross_attention_dim is None:
-            raise ValueError("cross_attention_dim must be specified for CrossAttnUpBlock2D")
+            raise ValueError(
+                "cross_attention_dim must be specified for CrossAttnUpBlock2D"
+            )
         return CrossAttnUpBlock2D(
             num_layers=num_layers,
             transformer_layers_per_block=transformer_layers_per_block,
@@ -359,7 +404,9 @@ def get_up_block(
     # custom MV2D attention block
     elif up_block_type == "CrossAttnUpBlockMV2D":
         if cross_attention_dim is None:
-            raise ValueError("cross_attention_dim must be specified for CrossAttnUpBlockMV2D")
+            raise ValueError(
+                "cross_attention_dim must be specified for CrossAttnUpBlockMV2D"
+            )
         return CrossAttnUpBlockMV2D(
             num_layers=num_layers,
             transformer_layers_per_block=transformer_layers_per_block,
@@ -385,11 +432,13 @@ def get_up_block(
             sparse_mv_attention=sparse_mv_attention,
             selfattn_block=selfattn_block,
             mvcd_attention=mvcd_attention,
-            use_dino=use_dino
-        )    
+            use_dino=use_dino,
+        )
     elif up_block_type == "SimpleCrossAttnUpBlock2D":
         if cross_attention_dim is None:
-            raise ValueError("cross_attention_dim must be specified for SimpleCrossAttnUpBlock2D")
+            raise ValueError(
+                "cross_attention_dim must be specified for SimpleCrossAttnUpBlock2D"
+            )
         return SimpleCrossAttnUpBlock2D(
             num_layers=num_layers,
             in_channels=in_channels,
@@ -527,15 +576,17 @@ class UNetMidBlockMV2DCrossAttn(nn.Module):
         cd_attention_mid: bool = False,
         multiview_attention: bool = True,
         sparse_mv_attention: bool = False,
-        selfattn_block: str = "custom", 
-        mvcd_attention: bool=False,
-        use_dino: bool = False
+        selfattn_block: str = "custom",
+        mvcd_attention: bool = False,
+        use_dino: bool = False,
     ):
         super().__init__()
 
         self.has_cross_attention = True
         self.num_attention_heads = num_attention_heads
-        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        resnet_groups = (
+            resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
+        )
         if selfattn_block == "custom":
             from .transformer_mv2d import TransformerMV2DModel
         elif selfattn_block == "rowwise":
@@ -544,7 +595,7 @@ class UNetMidBlockMV2DCrossAttn(nn.Module):
             from .transformer_mv2d_self_rowwise import TransformerMV2DModel
         else:
             raise NotImplementedError
-        
+
         # there is always at least one resnet
         resnets = [
             ResnetBlock2D(
@@ -580,7 +631,7 @@ class UNetMidBlockMV2DCrossAttn(nn.Module):
                         multiview_attention=multiview_attention,
                         sparse_mv_attention=sparse_mv_attention,
                         mvcd_attention=mvcd_attention,
-                        use_dino=use_dino
+                        use_dino=use_dino,
                     )
                 )
             else:
@@ -611,7 +662,7 @@ class UNetMidBlockMV2DCrossAttn(nn.Module):
         attention_mask: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        dino_feature: Optional[torch.FloatTensor] = None
+        dino_feature: Optional[torch.FloatTensor] = None,
     ) -> torch.FloatTensor:
         hidden_states = self.resnets[0](hidden_states, temb)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
@@ -658,8 +709,8 @@ class CrossAttnUpBlockMV2D(nn.Module):
         multiview_attention: bool = True,
         sparse_mv_attention: bool = False,
         selfattn_block: str = "custom",
-        mvcd_attention: bool=False,
-        use_dino: bool = False
+        mvcd_attention: bool = False,
+        use_dino: bool = False,
     ):
         super().__init__()
         resnets = []
@@ -676,7 +727,7 @@ class CrossAttnUpBlockMV2D(nn.Module):
             from .transformer_mv2d_self_rowwise import TransformerMV2DModel
         else:
             raise NotImplementedError
-        
+
         for i in range(num_layers):
             res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
             resnet_in_channels = prev_output_channel if i == 0 else out_channels
@@ -713,7 +764,7 @@ class CrossAttnUpBlockMV2D(nn.Module):
                         multiview_attention=multiview_attention,
                         sparse_mv_attention=sparse_mv_attention,
                         mvcd_attention=mvcd_attention,
-                        use_dino=use_dino
+                        use_dino=use_dino,
                     )
                 )
             else:
@@ -722,7 +773,9 @@ class CrossAttnUpBlockMV2D(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
         if add_upsample:
-            self.upsamplers = nn.ModuleList([Upsample2D(out_channels, use_conv=True, out_channels=out_channels)])
+            self.upsamplers = nn.ModuleList(
+                [Upsample2D(out_channels, use_conv=True, out_channels=out_channels)]
+            )
         else:
             self.upsamplers = None
 
@@ -738,7 +791,7 @@ class CrossAttnUpBlockMV2D(nn.Module):
         upsample_size: Optional[int] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        dino_feature: Optional[torch.FloatTensor] = None
+        dino_feature: Optional[torch.FloatTensor] = None,
     ):
         for resnet, attn in zip(self.resnets, self.attentions):
             # pop res hidden states
@@ -757,7 +810,9 @@ class CrossAttnUpBlockMV2D(nn.Module):
 
                     return custom_forward
 
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                ckpt_kwargs: Dict[str, Any] = (
+                    {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                )
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(resnet),
                     hidden_states,
@@ -824,8 +879,8 @@ class CrossAttnDownBlockMV2D(nn.Module):
         multiview_attention: bool = True,
         sparse_mv_attention: bool = False,
         selfattn_block: str = "custom",
-        mvcd_attention: bool=False,
-        use_dino: bool = False
+        mvcd_attention: bool = False,
+        use_dino: bool = False,
     ):
         super().__init__()
         resnets = []
@@ -841,7 +896,7 @@ class CrossAttnDownBlockMV2D(nn.Module):
             from .transformer_mv2d_self_rowwise import TransformerMV2DModel
         else:
             raise NotImplementedError
-        
+
         for i in range(num_layers):
             in_channels = in_channels if i == 0 else out_channels
             resnets.append(
@@ -876,7 +931,7 @@ class CrossAttnDownBlockMV2D(nn.Module):
                         multiview_attention=multiview_attention,
                         sparse_mv_attention=sparse_mv_attention,
                         mvcd_attention=mvcd_attention,
-                        use_dino=use_dino
+                        use_dino=use_dino,
                     )
                 )
             else:
@@ -888,7 +943,11 @@ class CrossAttnDownBlockMV2D(nn.Module):
             self.downsamplers = nn.ModuleList(
                 [
                     Downsample2D(
-                        out_channels, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op"
+                        out_channels,
+                        use_conv=True,
+                        out_channels=out_channels,
+                        padding=downsample_padding,
+                        name="op",
                     )
                 ]
             )
@@ -924,7 +983,9 @@ class CrossAttnDownBlockMV2D(nn.Module):
 
                     return custom_forward
 
-                ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                ckpt_kwargs: Dict[str, Any] = (
+                    {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                )
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(resnet),
                     hidden_states,
@@ -968,4 +1029,3 @@ class CrossAttnDownBlockMV2D(nn.Module):
             output_states = output_states + (hidden_states,)
 
         return hidden_states, output_states
-

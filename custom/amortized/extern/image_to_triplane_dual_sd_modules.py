@@ -1,25 +1,24 @@
+import re
+from dataclasses import dataclass
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import re
+from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
+from diffusers.loaders import AttnProcsLayers
+from diffusers.models.attention_processor import (  # , AttnProcessor, LoRAAttnProcessor, LoRALinearLayer
+    Attention,
+)
+from diffusers.models.lora import LoRACompatibleConv
 
-from diffusers.models.attention_processor import Attention #, AttnProcessor, LoRAAttnProcessor, LoRALinearLayer
+from threestudio.utils.base import BaseModule
+from threestudio.utils.misc import cleanup
+
 # from diffusers.pipelines.stable_diffusion.stable_unclip_image_normalizer import StableUnCLIPImageNormalizer
 # from diffusers.models.embeddings import get_timestep_embedding
 # from diffusers.utils.torch_utils import randn_tensor
 from threestudio.utils.typing import *
-from diffusers import (
-    DDPMScheduler,
-    UNet2DConditionModel,
-    AutoencoderKL
-)
-from diffusers.loaders import AttnProcsLayers
-from threestudio.utils.base import BaseModule
-from dataclasses import dataclass
-
-from diffusers.models.lora import LoRACompatibleConv
-from threestudio.utils.misc import cleanup
 
 
 class LoRALinearLayerwBias(nn.Module):
@@ -51,14 +50,16 @@ class LoRALinearLayerwBias(nn.Module):
         network_alpha: Optional[float] = None,
         device: Optional[Union[torch.device, str]] = None,
         dtype: Optional[torch.dtype] = None,
-        with_bias: bool = False
+        with_bias: bool = False,
     ):
         super().__init__()
 
         self.down = nn.Linear(in_features, rank, bias=False, device=device, dtype=dtype)
         self.up = nn.Linear(rank, out_features, bias=False, device=device, dtype=dtype)
         if with_bias:
-            self.bias = nn.Parameter(torch.zeros([1, 1, out_features], device=device, dtype=dtype))
+            self.bias = nn.Parameter(
+                torch.zeros([1, 1, out_features], device=device, dtype=dtype)
+            )
         self.with_bias = with_bias
 
         # This value has the same meaning as the `--network_alpha` option in the kohya-ss trainer script.
@@ -70,7 +71,6 @@ class LoRALinearLayerwBias(nn.Module):
 
         nn.init.normal_(self.down.weight, std=1 / rank)
         nn.init.zeros_(self.up.weight)
-
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         orig_dtype = hidden_states.dtype
@@ -85,7 +85,8 @@ class LoRALinearLayerwBias(nn.Module):
             up_hidden_states *= self.network_alpha / self.rank
 
         return up_hidden_states.to(orig_dtype)
-    
+
+
 class TriplaneLoRAConv2dLayer(nn.Module):
     r"""
     A convolutional layer that is used with LoRA.
@@ -119,24 +120,51 @@ class TriplaneLoRAConv2dLayer(nn.Module):
         padding: Union[int, Tuple[int, int], str] = 0,
         network_alpha: Optional[float] = None,
         with_bias: bool = False,
-        locon_type: str = "septu_v1", #septu_v2, vanilla_v1, vanilla_v2
+        locon_type: str = "septu_v1",  # septu_v2, vanilla_v1, vanilla_v2
     ):
         super().__init__()
 
-        assert locon_type in ["septu_v1", "septu_v2", "vanilla_v1", "vanilla_v2"], "The LoCON type is not supported."
+        assert locon_type in [
+            "septu_v1",
+            "septu_v2",
+            "vanilla_v1",
+            "vanilla_v2",
+        ], "The LoCON type is not supported."
         if locon_type == "septu_v1":
             raise NotImplementedError("The LoCON type is not supported yet.")
-        
+
         elif locon_type == "septu_v2":
             raise NotImplementedError("The LoCON type is not supported yet.")
-        
+
         elif locon_type == "vanilla_v1":
-            self.down = nn.Conv2d(in_features, rank, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
-            self.up = nn.Conv2d(rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=with_bias)
+            self.down = nn.Conv2d(
+                in_features,
+                rank,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                bias=False,
+            )
+            self.up = nn.Conv2d(
+                rank, out_features, kernel_size=(1, 1), stride=(1, 1), bias=with_bias
+            )
 
         elif locon_type == "vanilla_v2":
-            self.down = nn.Conv2d(in_features, rank, kernel_size=(1, 1), stride=(1, 1), padding=padding, bias=False)
-            self.up = nn.Conv2d(rank, out_features, kernel_size=kernel_size, stride=stride, bias=with_bias)
+            self.down = nn.Conv2d(
+                in_features,
+                rank,
+                kernel_size=(1, 1),
+                stride=(1, 1),
+                padding=padding,
+                bias=False,
+            )
+            self.up = nn.Conv2d(
+                rank,
+                out_features,
+                kernel_size=kernel_size,
+                stride=stride,
+                bias=with_bias,
+            )
 
         self.network_alpha = network_alpha
         self.rank = rank
@@ -145,13 +173,24 @@ class TriplaneLoRAConv2dLayer(nn.Module):
 
     def _init_weights(self):
         for layer in [
-            "down_xy_geo", "down_xz_geo", "down_yz_geo", "down_xy_tex", "down_xz_tex", "down_yz_tex", # in case of septu_vX
-            "up_xy", "up_xz", "up_yz", "up_xy_tex", "up_xz_tex", "up_yz_tex", # in case of septu_vX
-            "down", "up" # in case of vanilla
+            "down_xy_geo",
+            "down_xz_geo",
+            "down_yz_geo",
+            "down_xy_tex",
+            "down_xz_tex",
+            "down_yz_tex",  # in case of septu_vX
+            "up_xy",
+            "up_xz",
+            "up_yz",
+            "up_xy_tex",
+            "up_xz_tex",
+            "up_yz_tex",  # in case of septu_vX
+            "down",
+            "up",  # in case of vanilla
         ]:
             if hasattr(self, layer):
                 # initialize the weights
-                if "down" in layer: 
+                if "down" in layer:
                     nn.init.normal_(getattr(self, layer).weight, std=1 / self.rank)
                 elif "up" in layer:
                     nn.init.zeros_(getattr(self, layer).weight)
@@ -159,15 +198,18 @@ class TriplaneLoRAConv2dLayer(nn.Module):
                 if getattr(self, layer).bias is not None:
                     nn.init.zeros_(getattr(self, layer).bias)
 
-
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         orig_dtype = hidden_states.dtype
-        dtype = self.down_xy_geo.weight.dtype if "hexa" in self.locon_type else self.down.weight.dtype
+        dtype = (
+            self.down_xy_geo.weight.dtype
+            if "hexa" in self.locon_type
+            else self.down.weight.dtype
+        )
 
         if "hexa" in self.locon_type:
             # xy plane
             raise NotImplementedError("The LoCON type is not supported yet.")
-        
+
         elif "vanilla" in self.locon_type:
             lora_hidden_states = self.up(self.down(hidden_states.to(dtype)))
 
@@ -175,6 +217,7 @@ class TriplaneLoRAConv2dLayer(nn.Module):
             lora_hidden_states *= self.network_alpha / self.rank
 
         return lora_hidden_states.to(orig_dtype)
+
 
 class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
     """
@@ -187,11 +230,17 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         rank: int = 4,
         network_alpha: Optional[float] = None,
         with_bias: bool = False,
-        lora_type: str = "septu_v1", # vanilla, 
+        lora_type: str = "septu_v1",  # vanilla,
     ):
         super().__init__()
 
-        assert lora_type in ["septu_v1", "vanilla", "none", "basic", "hexa_v1"], "The LoRA type is not supported."
+        assert lora_type in [
+            "septu_v1",
+            "vanilla",
+            "none",
+            "basic",
+            "hexa_v1",
+        ], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
@@ -199,60 +248,131 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
 
         if lora_type in ["septu_v1", "hexa_v1"]:
             # lora for 1st plane geometry
-            self.to_q_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_xy_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xy_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_v_xy_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_out_xy_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 1st plane texture
-            self.to_q_xy_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xy_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xy_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xy_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            
+            self.to_q_xy_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xy_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_v_xy_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_out_xy_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+
             # lora for 2nd plane geometry
-            self.to_q_xz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_xz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_v_xz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_out_xz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 2nd plane texture
-            self.to_q_xz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_xz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_v_xz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_out_xz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 3nd plane geometry
-            self.to_q_yz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_yz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_yz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_yz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_yz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_yz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_v_yz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_out_yz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 3nd plane texture
-            self.to_q_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_yz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_yz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_v_yz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_out_yz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             if lora_type in ["septu_v1"]:
                 # lora for input plane
-                self.to_q_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-                self.to_k_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-                self.to_v_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-                self.to_out_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-
+                self.to_q_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
+                self.to_k_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
+                self.to_v_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
+                self.to_out_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
 
         elif lora_type in ["vanilla", "basic"]:
-            self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_lora = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_lora = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_v_lora = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_out_lora = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
     def __call__(
-        self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None, scale=1.0, temb=None,
-        image_embed_local=None, 
+        self,
+        attn: Attention,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        scale=1.0,
+        temb=None,
+        image_embed_local=None,
     ):
-        assert encoder_hidden_states is None, "The encoder_hidden_states should be None."
+        assert (
+            encoder_hidden_states is None
+        ), "The encoder_hidden_states should be None."
 
         residual = hidden_states
 
@@ -263,20 +383,29 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         ############################################################################################################
         # query
-        if self.lora_type in ["septu_v1",]:
+        if self.lora_type in [
+            "septu_v1",
+        ]:
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)
             # lora for xy plane geometry
@@ -294,7 +423,9 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _query_new[6::7] = self.to_q_inp_lora(hidden_states[6::7])
             query = query + scale * _query_new
-        elif self.lora_type in ["hexa_v1",]:
+        elif self.lora_type in [
+            "hexa_v1",
+        ]:
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)
             # lora for xy plane geometry
@@ -315,18 +446,24 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         elif self.lora_type in ["none"]:
             query = attn.to_q(hidden_states)
         else:
-            raise NotImplementedError("The LoRA type is not supported for the query in HplaneSelfAttentionLoRAAttnProcessor.")
+            raise NotImplementedError(
+                "The LoRA type is not supported for the query in HplaneSelfAttentionLoRAAttnProcessor."
+            )
 
         ############################################################################################################
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         ############################################################################################################
         # key and value
-        if self.lora_type in ["septu_v1",]:
+        if self.lora_type in [
+            "septu_v1",
+        ]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for xy plane geometry
@@ -362,7 +499,9 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _value_new[6::7] = self.to_v_inp_lora(encoder_hidden_states[6::7])
             value = value + scale * _value_new
-        elif self.lora_type in ["hexa_v1",]:
+        elif self.lora_type in [
+            "hexa_v1",
+        ]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for xy plane geometry
@@ -396,15 +535,23 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             value = value + scale * _value_new
 
         elif self.lora_type in ["vanilla", "basic"]:
-            key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
-            value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
-            
-        elif self.lora_type in ["none", ]:
+            key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(
+                encoder_hidden_states
+            )
+            value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(
+                encoder_hidden_states
+            )
+
+        elif self.lora_type in [
+            "none",
+        ]:
             key = attn.to_k(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states)
 
         else:
-            raise NotImplementedError("The LoRA type is not supported for the key and value in HplaneSelfAttentionLoRAAttnProcessor.")
+            raise NotImplementedError(
+                "The LoRA type is not supported for the key and value in HplaneSelfAttentionLoRAAttnProcessor."
+            )
 
         ############################################################################################################
         # attention scores
@@ -413,20 +560,34 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         if self.lora_type in ["septu_v1", "vanilla", "hexa_v1"]:
             num_planes = 7 if batch_size % 7 == 0 else 6
             query = attn.head_to_batch_dim(
-                query.view(batch_size // num_planes, sequence_length * num_planes, self.hidden_size)
-            ) 
+                query.view(
+                    batch_size // num_planes,
+                    sequence_length * num_planes,
+                    self.hidden_size,
+                )
+            )
             key = attn.head_to_batch_dim(
-                key.view(batch_size // num_planes, sequence_length * num_planes, self.hidden_size)
+                key.view(
+                    batch_size // num_planes,
+                    sequence_length * num_planes,
+                    self.hidden_size,
+                )
             )
             value = attn.head_to_batch_dim(
-                value.view(batch_size // num_planes, sequence_length * num_planes, self.hidden_size)
+                value.view(
+                    batch_size // num_planes,
+                    sequence_length * num_planes,
+                    self.hidden_size,
+                )
             )
             # calculate the attention scores
             attention_probs = attn.get_attention_scores(query, key, attention_mask)
             hidden_states = torch.bmm(attention_probs, value)
             hidden_states = attn.batch_to_head_dim(hidden_states)
             # split the hidden states into 6 planes
-            hidden_states = hidden_states.view(batch_size, sequence_length, self.hidden_size)
+            hidden_states = hidden_states.view(
+                batch_size, sequence_length, self.hidden_size
+            )
         elif self.lora_type in ["none", "basic"]:
             query = attn.head_to_batch_dim(query)
             key = attn.head_to_batch_dim(key)
@@ -436,11 +597,15 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             hidden_states = torch.bmm(attention_probs, value)
             hidden_states = attn.batch_to_head_dim(hidden_states)
         else:
-            raise NotImplementedError("The LoRA type is not supported for attention scores calculation in HplaneSelfAttentionLoRAAttnProcessor.")
+            raise NotImplementedError(
+                "The LoRA type is not supported for attention scores calculation in HplaneSelfAttentionLoRAAttnProcessor."
+            )
 
         ############################################################################################################
         # linear proj
-        if self.lora_type in ["septu_v1", ]:
+        if self.lora_type in [
+            "septu_v1",
+        ]:
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for xy plane geometry
@@ -458,7 +623,9 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _hidden_states_new[6::7] = self.to_out_inp_lora(hidden_states[6::7])
             hidden_states = hidden_states + scale * _hidden_states_new
-        elif self.lora_type in ["hexa_v1", ]:
+        elif self.lora_type in [
+            "hexa_v1",
+        ]:
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for xy plane geometry
@@ -475,18 +642,26 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
             _hidden_states_new[5::6] = self.to_out_yz_lora_tex(hidden_states[5::6])
             hidden_states = hidden_states + scale * _hidden_states_new
         elif self.lora_type in ["vanilla", "basic"]:
-            hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
-        elif self.lora_type in ["none",]:
+            hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(
+                hidden_states
+            )
+        elif self.lora_type in [
+            "none",
+        ]:
             hidden_states = attn.to_out[0](hidden_states)
         else:
-            raise NotImplementedError("The LoRA type is not supported for the to_out layer in HplaneSelfAttentionLoRAAttnProcessor.")
+            raise NotImplementedError(
+                "The LoRA type is not supported for the to_out layer in HplaneSelfAttentionLoRAAttnProcessor."
+            )
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
         ############################################################################################################
 
         if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+            hidden_states = hidden_states.transpose(-1, -2).reshape(
+                batch_size, channel, height, width
+            )
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual
@@ -494,6 +669,7 @@ class TriplaneSelfAttentionLoRAAttnProcessor(nn.Module):
         hidden_states = hidden_states / attn.rescale_output_factor
 
         return hidden_states
+
 
 class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
     """
@@ -507,72 +683,205 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         rank: int = 4,
         network_alpha: Optional[float] = None,
         with_bias: bool = False,
-        lora_type: str = "septu_v1", # vanilla,
+        lora_type: str = "septu_v1",  # vanilla,
     ):
         super().__init__()
 
-        assert lora_type in ["septu_v1", "vanilla", "none", "hexa_v1"], "The LoRA type is not supported."
+        assert lora_type in [
+            "septu_v1",
+            "vanilla",
+            "none",
+            "hexa_v1",
+        ], "The LoRA type is not supported."
 
         self.hidden_size = hidden_size
         self.rank = rank
         self.lora_type = lora_type
 
-        if lora_type in ["septu_v1","hexa_v1"]:
+        if lora_type in ["septu_v1", "hexa_v1"]:
             # lora for 1st plane geometry
-            self.to_q_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xy_lora_geo = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xy_lora_geo = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xy_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_xy_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xy_lora_geo = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_v_xy_lora_geo = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_out_xy_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 1st plane texture
-            self.to_q_xy_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xy_lora_tex = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xy_lora_tex = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xy_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_xy_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xy_lora_tex = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_v_xy_lora_tex = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_out_xy_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 2nd plane geometry
-            self.to_q_xz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xz_lora_geo = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xz_lora_geo = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_xz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xz_lora_geo = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_v_xz_lora_geo = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_out_xz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 2nd plane texture
-            self.to_q_xz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_xz_lora_tex = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_xz_lora_tex = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_xz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_xz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_xz_lora_tex = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_v_xz_lora_tex = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_out_xz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 3nd plane geometry
-            self.to_q_yz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_yz_lora_geo = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_yz_lora_geo = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_yz_lora_geo = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_yz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_yz_lora_geo = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_v_yz_lora_geo = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_out_yz_lora_geo = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             # lora for 3nd plane texture
-            self.to_q_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_yz_lora_tex = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_yz_lora_tex = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_yz_lora_tex = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_yz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_yz_lora_tex = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_v_yz_lora_tex = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_out_yz_lora_tex = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
             if lora_type in ["septu_v1"]:
                 # lora for input plane
-                self.to_q_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-                self.to_k_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-                self.to_v_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-                self.to_out_inp_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+                self.to_q_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
+                self.to_k_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
+                self.to_v_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
+                self.to_out_inp_lora = LoRALinearLayerwBias(
+                    hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+                )
 
         elif lora_type in ["vanilla"]:
             # lora for all planes
-            self.to_q_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_k_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_v_lora = LoRALinearLayerwBias(cross_attention_dim, hidden_size, rank, network_alpha, with_bias=with_bias)
-            self.to_out_lora = LoRALinearLayerwBias(hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias)
+            self.to_q_lora = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
+            self.to_k_lora = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_v_lora = LoRALinearLayerwBias(
+                cross_attention_dim,
+                hidden_size,
+                rank,
+                network_alpha,
+                with_bias=with_bias,
+            )
+            self.to_out_lora = LoRALinearLayerwBias(
+                hidden_size, hidden_size, rank, network_alpha, with_bias=with_bias
+            )
 
     def __call__(
-        self, attn: Attention, hidden_states, encoder_hidden_states=None, attention_mask=None, scale=1.0, temb=None,
+        self,
+        attn: Attention,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        scale=1.0,
+        temb=None,
         image_embed_local=None,
     ):
-        assert encoder_hidden_states is not None, "The encoder_hidden_states should not be None."
+        assert (
+            encoder_hidden_states is not None
+        ), "The encoder_hidden_states should not be None."
 
         residual = hidden_states
 
@@ -583,21 +892,31 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         ############################################################################################################
         # query
-        if self.lora_type in ["septu_v1",]:
+        if self.lora_type in [
+            "septu_v1",
+        ]:
             query = attn.to_q(hidden_states)
-            _query_new = torch.zeros_like(query)        
+            _query_new = torch.zeros_like(query)
             # lora for xy plane geometry
             _query_new[0::7] = self.to_q_xy_lora_geo(hidden_states[0::7])
             # lora for xy plane texture
@@ -613,7 +932,9 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _query_new[6::7] = self.to_q_inp_lora(hidden_states[6::7])
             query = query + scale * _query_new
-        elif self.lora_type in ["hexa_v1",]:
+        elif self.lora_type in [
+            "hexa_v1",
+        ]:
             query = attn.to_q(hidden_states)
             _query_new = torch.zeros_like(query)
             # lora for xy plane geometry
@@ -632,7 +953,7 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
 
         elif self.lora_type == "vanilla":
             query = attn.to_q(hidden_states) + scale * self.to_q_lora(hidden_states)
-        
+
         elif self.lora_type == "none":
             query = attn.to_q(hidden_states)
 
@@ -642,11 +963,15 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         ############################################################################################################
         # key and value
-        if self.lora_type in ["septu_v1",]:
+        if self.lora_type in [
+            "septu_v1",
+        ]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for xy plane geometry
@@ -682,7 +1007,9 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _value_new[6::7] = self.to_v_inp_lora(encoder_hidden_states[6::7])
             value = value + scale * _value_new
-        elif self.lora_type in ["hexa_v1",]:
+        elif self.lora_type in [
+            "hexa_v1",
+        ]:
             key = attn.to_k(encoder_hidden_states)
             _key_new = torch.zeros_like(key)
             # lora for xy plane geometry
@@ -715,11 +1042,19 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             _value_new[5::6] = self.to_v_yz_lora_tex(encoder_hidden_states[5::6])
             value = value + scale * _value_new
 
-        elif self.lora_type in ["vanilla",]:
-            key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(encoder_hidden_states)
-            value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(encoder_hidden_states)
+        elif self.lora_type in [
+            "vanilla",
+        ]:
+            key = attn.to_k(encoder_hidden_states) + scale * self.to_k_lora(
+                encoder_hidden_states
+            )
+            value = attn.to_v(encoder_hidden_states) + scale * self.to_v_lora(
+                encoder_hidden_states
+            )
 
-        elif self.lora_type in ["none",]:
+        elif self.lora_type in [
+            "none",
+        ]:
             key = attn.to_k(encoder_hidden_states)
             value = attn.to_v(encoder_hidden_states)
 
@@ -727,15 +1062,16 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         value = attn.head_to_batch_dim(value)
         ############################################################################################################
 
-        # calculate the attention scores        
+        # calculate the attention scores
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
-
         ############################################################################################################
         # linear proj
-        if self.lora_type in ["septu_v1", ]:
+        if self.lora_type in [
+            "septu_v1",
+        ]:
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for xy plane geometry
@@ -753,7 +1089,9 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for input plane
             _hidden_states_new[6::7] = self.to_out_inp_lora(hidden_states[6::7])
             hidden_states = hidden_states + scale * _hidden_states_new
-        elif self.lora_type in ["hexa_v1", ]:
+        elif self.lora_type in [
+            "hexa_v1",
+        ]:
             hidden_states = attn.to_out[0](hidden_states)
             _hidden_states_new = torch.zeros_like(hidden_states)
             # lora for xy plane geometry
@@ -769,19 +1107,29 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
             # lora for yz plane texture
             _hidden_states_new[5::6] = self.to_out_yz_lora_tex(hidden_states[5::6])
             hidden_states = hidden_states + scale * _hidden_states_new
-        elif self.lora_type in ["vanilla",]:
-            hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(hidden_states)
-        elif self.lora_type in ["none",]:
+        elif self.lora_type in [
+            "vanilla",
+        ]:
+            hidden_states = attn.to_out[0](hidden_states) + scale * self.to_out_lora(
+                hidden_states
+            )
+        elif self.lora_type in [
+            "none",
+        ]:
             hidden_states = attn.to_out[0](hidden_states)
         else:
-            raise NotImplementedError("The LoRA type is not supported for the to_out layer in HplaneCrossAttentionLoRAAttnProcessor.")
+            raise NotImplementedError(
+                "The LoRA type is not supported for the to_out layer in HplaneCrossAttentionLoRAAttnProcessor."
+            )
 
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
         ############################################################################################################
 
         if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+            hidden_states = hidden_states.transpose(-1, -2).reshape(
+                batch_size, channel, height, width
+            )
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual
@@ -789,6 +1137,7 @@ class TriplaneCrossAttentionLoRAAttnProcessor(nn.Module):
         hidden_states = hidden_states / attn.rescale_output_factor
 
         return hidden_states
+
 
 class OneStepTriplaneDualStableDiffusion(BaseModule):
     """
@@ -798,9 +1147,9 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
     @dataclass
     class Config(BaseModule.Config):
         pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5"
-        training_type: str = "lora_rank_4",
-        timestep: int = 999,
-        output_dim: int = 32,
+        training_type: str = ("lora_rank_4",)
+        timestep: int = (999,)
+        output_dim: int = (32,)
         gradient_checkpoint: bool = False
         self_lora_type: str = "septu_v1"
         cross_lora_type: str = "septu_v1"
@@ -810,13 +1159,14 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
     cfg: Config
 
     def configure(self) -> None:
-
         self.output_dim = self.cfg.output_dim
         self.num_planes = 6
 
         # we only use the unet and vae model here
         model_path = self.cfg.pretrained_model_name_or_path
-        self.scheduler = DDPMScheduler.from_pretrained(model_path, subfolder="scheduler")
+        self.scheduler = DDPMScheduler.from_pretrained(
+            model_path, subfolder="scheduler"
+        )
         alphas_cumprod = self.scheduler.alphas_cumprod
         self.alphas: Float[Tensor, "T"] = alphas_cumprod**0.5
         self.sigmas: Float[Tensor, "T"] = (1 - alphas_cumprod) ** 0.5
@@ -828,7 +1178,7 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
         # self.image_noising_scheduler = DDPMScheduler.from_pretrained(model_path, subfolder="image_noising_scheduler")
         # the encoder is not needed
         del vae.encoder
-        del vae.quant_conv 
+        del vae.quant_conv
         cleanup()
 
         # transform the attn_processor to customized one
@@ -837,16 +1187,20 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
         # set the training type
         training_type = self.cfg.training_type
 
+        assert (
+            "lora" in training_type
+            or "locon" in training_type
+            or "full" in training_type
+        ), "The training type is not supported."
 
-
-        assert "lora" in training_type or "locon" in training_type or "full" in training_type, "The training type is not supported."
- 
-        if not "full" in training_type: # then paramter-efficient training
-
+        if not "full" in training_type:  # then paramter-efficient training
             # save trainable parameters
             trainable_params = {}
 
-            assert "lora" in training_type or "locon" in training_type, "The training type is not supported."
+            assert (
+                "lora" in training_type or "locon" in training_type
+            ), "The training type is not supported."
+
             @dataclass
             class SubModules:
                 unet: UNet2DConditionModel
@@ -867,13 +1221,16 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
             # overwrite the unet and vae with the customized processors
 
             if "lora" in training_type:
-
                 # parse the rank from the training type, with the template "lora_rank_{}"
-                assert "self_lora_rank" in training_type, "The self_lora_rank is not specified."
+                assert (
+                    "self_lora_rank" in training_type
+                ), "The self_lora_rank is not specified."
                 rank = re.search(r"self_lora_rank_(\d+)", training_type).group(1)
                 self.self_lora_rank = int(rank)
 
-                assert "cross_lora_rank" in training_type, "The cross_lora_rank is not specified."
+                assert (
+                    "cross_lora_rank" in training_type
+                ), "The cross_lora_rank is not specified."
                 rank = re.search(r"cross_lora_rank_(\d+)", training_type).group(1)
                 self.cross_lora_rank = int(rank)
 
@@ -884,10 +1241,10 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
 
                 # specify the attn_processor for unet
                 lora_attn_procs = self._set_attn_processor(
-                    self.unet, 
+                    self.unet,
                     self_attn_name="attn1.processor",
                     self_lora_type=self.cfg.self_lora_type,
-                    cross_lora_type=self.cfg.cross_lora_type
+                    cross_lora_type=self.cfg.cross_lora_type,
                 )
                 self.unet.set_attn_processor(lora_attn_procs)
                 # update the trainable parameters
@@ -895,10 +1252,10 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
 
                 # specify the attn_processor for vae
                 lora_attn_procs = self._set_attn_processor(
-                    self.vae, 
+                    self.vae,
                     self_attn_name="processor",
-                    self_lora_type=self.cfg.vae_attn_type, # hard-coded for vae 
-                    cross_lora_type="vanilla"
+                    self_lora_type=self.cfg.vae_attn_type,  # hard-coded for vae
+                    cross_lora_type="vanilla",
                 )
                 self.vae.set_attn_processor(lora_attn_procs)
                 # update the trainable parameters
@@ -916,8 +1273,7 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
 
                 # specify the conv_processor for unet
                 locon_procs = self._set_conv_processor(
-                    self.unet,
-                    locon_type=self.cfg.locon_type
+                    self.unet, locon_type=self.cfg.locon_type
                 )
 
                 # update the trainable parameters
@@ -926,7 +1282,7 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
                 # specify the conv_processor for vae
                 locon_procs = self._set_conv_processor(
                     self.vae,
-                    locon_type="vanilla_v1", # hard-coded for vae decoder
+                    locon_type="vanilla_v1",  # hard-coded for vae decoder
                 )
                 # update the trainable parameters
                 trainable_params.update(locon_procs)
@@ -934,8 +1290,10 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
             # overwrite the outconv
             # conv_out_orig = self.vae.decoder.conv_out
             conv_out_new = nn.Conv2d(
-                in_channels=128, # conv_out_orig.in_channels, hard-coded
-                out_channels=self.cfg.output_dim, kernel_size=3, padding=1
+                in_channels=128,  # conv_out_orig.in_channels, hard-coded
+                out_channels=self.cfg.output_dim,
+                kernel_size=3,
+                padding=1,
             )
 
             # update the trainable parameters
@@ -945,10 +1303,9 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
             # save the trainable parameters
             self.peft_layers = AttnProcsLayers(trainable_params).to(self.device)
             self.peft_layers._load_state_dict_pre_hooks.clear()
-            self.peft_layers._state_dict_hooks.clear()      
+            self.peft_layers._state_dict_hooks.clear()
 
-        elif training_type == "full": # full parameter training
-
+        elif training_type == "full":  # full parameter training
             # just nullify the parameters
             self.self_lora_rank = 0
             self.cross_lora_rank = 0
@@ -960,8 +1317,10 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
             # overwrite the outconv
             # conv_out_orig = self.vae.decoder.conv_out
             conv_out_new = nn.Conv2d(
-                in_channels=128, # conv_out_orig.in_channels, hard-coded
-                out_channels=self.cfg.output_dim, kernel_size=3, padding=1
+                in_channels=128,  # conv_out_orig.in_channels, hard-coded
+                out_channels=self.cfg.output_dim,
+                kernel_size=3,
+                padding=1,
             )
 
             # update the trainable parameters
@@ -972,7 +1331,7 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
 
             # specify the attn_processor for unet
             lora_attn_procs = self._set_attn_processor(
-                self.unet, 
+                self.unet,
                 self_attn_name="attn1.processor",
                 self_lora_type="none",
                 cross_lora_type="none",
@@ -1010,8 +1369,8 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
                     kernel_size=_module.kernel_size,
                     stride=_module.stride,
                     padding=_module.padding,
-                    with_bias = self.w_locon_bias,
-                    locon_type= locon_type,
+                    with_bias=self.w_locon_bias,
+                    locon_type=locon_type,
                 )
                 # add the locon processor to the module
                 _module.lora_layer = locon_proc
@@ -1020,27 +1379,22 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
                 locon_procs[key_name] = locon_proc
         return locon_procs
 
-
-
     def _set_attn_processor(
-            self, 
-            module,
-            self_attn_name: str = "attn1.processor",
-            self_attn_procs = TriplaneSelfAttentionLoRAAttnProcessor,
-            self_lora_type: str = "septu_v1",
-            cross_attn_procs = TriplaneCrossAttentionLoRAAttnProcessor,
-            cross_lora_type: str = "septu_v1",
-        ):
+        self,
+        module,
+        self_attn_name: str = "attn1.processor",
+        self_attn_procs=TriplaneSelfAttentionLoRAAttnProcessor,
+        self_lora_type: str = "septu_v1",
+        cross_attn_procs=TriplaneCrossAttentionLoRAAttnProcessor,
+        cross_lora_type: str = "septu_v1",
+    ):
         lora_attn_procs = {}
         for name in module.attn_processors.keys():
-
             if name.startswith("mid_block"):
                 hidden_size = module.config.block_out_channels[-1]
             elif name.startswith("up_blocks"):
                 block_id = int(name[len("up_blocks.")])
-                hidden_size = list(reversed(module.config.block_out_channels))[
-                    block_id
-                ]
+                hidden_size = list(reversed(module.config.block_out_channels))[block_id]
             elif name.startswith("down_blocks"):
                 block_id = int(name[len("down_blocks.")])
                 hidden_size = module.config.block_out_channels[block_id]
@@ -1052,18 +1406,23 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
                 # it is self-attention
                 cross_attention_dim = None
                 lora_attn_procs[name] = self_attn_procs(
-                    hidden_size, self.self_lora_rank, with_bias = self.w_lora_bias,
-                    lora_type = self_lora_type
+                    hidden_size,
+                    self.self_lora_rank,
+                    with_bias=self.w_lora_bias,
+                    lora_type=self_lora_type,
                 )
             else:
                 # it is cross-attention
                 cross_attention_dim = module.config.cross_attention_dim
                 lora_attn_procs[name] = cross_attn_procs(
-                    hidden_size, cross_attention_dim, self.cross_lora_rank, with_bias = self.w_lora_bias,
-                    lora_type = cross_lora_type
+                    hidden_size,
+                    cross_attention_dim,
+                    self.cross_lora_rank,
+                    with_bias=self.w_lora_bias,
+                    lora_type=cross_lora_type,
                 )
         return lora_attn_procs
-    
+
     def forward(
         self,
         text_embed,
@@ -1093,17 +1452,16 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
         # latents = 1 / self.vae.config.scaling_factor * latents
         # triplane = self.forward_decode(latents)
         # return triplane
-        
+
     def forward_denoise(
-        self, 
+        self,
         noisy_input,
         t,
         text_embed_local,
         image_embed_global,
-        image_embed_local = None,
-        image_latent = None, 
+        image_embed_local=None,
+        image_latent=None,
     ):
-
         batch_size = image_embed_global.size(0)
         noise_shape = noisy_input.size(-2)
 
@@ -1113,48 +1471,51 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
             flag_image_latent = True
 
         # image_embed_global = self.noise_image_embeddings(
-        #     image_embed_global, 
+        #     image_embed_global,
         #     0 # hard-coded for the noise level
         # )
         if flag_image_latent:
             # 1. repeat the image_embed_global to match the number of planes
-            image_embed_global = image_embed_global.repeat_interleave(self.num_planes + 1, dim=0)
+            image_embed_global = image_embed_global.repeat_interleave(
+                self.num_planes + 1, dim=0
+            )
 
             # 2. repeat the image_latent to match the number of planes
             _noisy_input = torch.zeros(
                 batch_size * (self.num_planes + 1),
                 *noisy_input.shape[1:],
-                device=noisy_input.device, dtype=noisy_input.dtype,
+                device=noisy_input.device,
+                dtype=noisy_input.dtype,
             )
             input_indices = (
                 torch.arange(
-                    start = self.num_planes,
-                    end = self.num_planes + 1,
-                ).repeat(batch_size) + \
-                torch.arange(
-                    start = 0,
-                    end = batch_size
-                ).repeat_interleave(1, dim=0) * (self.num_planes + 1)
+                    start=self.num_planes,
+                    end=self.num_planes + 1,
+                ).repeat(batch_size)
+                + torch.arange(start=0, end=batch_size).repeat_interleave(1, dim=0)
+                * (self.num_planes + 1)
             ).to(noisy_input.device)
             # [6] out of [0, 1, 2, 3, 4, 5, 6]
             _noisy_input[input_indices] = image_latent
 
             output_indices = (
                 torch.arange(
-                    start = 0, 
-                    end = self.num_planes, 
-                ).repeat(batch_size) + \
-                torch.arange(
-                    start = 0,
-                    end = batch_size
-                ).repeat_interleave(self.num_planes, dim=0) * (self.num_planes + 1)
+                    start=0,
+                    end=self.num_planes,
+                ).repeat(batch_size)
+                + torch.arange(start=0, end=batch_size).repeat_interleave(
+                    self.num_planes, dim=0
+                )
+                * (self.num_planes + 1)
             ).to(noisy_input.device)
             # [0, 1, 2, 3, 4, 5] out of [0, 1, 2, 3, 4, 5, 6]
             _noisy_input[output_indices] = noisy_input
             noisy_input = _noisy_input
 
             # 3. repeat the text_embed_local to match the number of planes
-            text_embed_local = text_embed_local.repeat_interleave(self.num_planes + 1, dim=0)
+            text_embed_local = text_embed_local.repeat_interleave(
+                self.num_planes + 1, dim=0
+            )
 
             # 4. repeat the timestep to match the number of planes
             if t.ndim == 0:
@@ -1163,8 +1524,12 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
             t = t.repeat_interleave(batch_size, dim=0)
             t[input_indices] = 0
         else:
-            image_embed_global = image_embed_global.repeat_interleave(self.num_planes, dim=0)
-            text_embed_local = text_embed_local.repeat_interleave(self.num_planes, dim=0)
+            image_embed_global = image_embed_global.repeat_interleave(
+                self.num_planes, dim=0
+            )
+            text_embed_local = text_embed_local.repeat_interleave(
+                self.num_planes, dim=0
+            )
 
         noisy_input = noisy_input.view(-1, 4, noise_shape, noise_shape)
         noise_pred = self.unet(
@@ -1188,6 +1553,8 @@ class OneStepTriplaneDualStableDiffusion(BaseModule):
     ):
         latents = latents.view(-1, 4, *latents.shape[-2:])
         triplane = self.vae.decode(latents).sample
-        triplane = triplane.view(-1, self.num_planes, self.cfg.output_dim, *triplane.shape[-2:])
+        triplane = triplane.view(
+            -1, self.num_planes, self.cfg.output_dim, *triplane.shape[-2:]
+        )
 
         return triplane

@@ -14,14 +14,14 @@ from diffusers import (
 from diffusers.utils.import_utils import is_xformers_available
 
 import threestudio
-from threestudio.utils.ops import perpendicular_component
+from extern.mvdream.camera_utils import normalize_camera
+from extern.mvdream.model_zoo import build_model
 from threestudio.models.prompt_processors.base import PromptProcessorOutput
 from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, cleanup, parse_version
+from threestudio.utils.ops import perpendicular_component
 from threestudio.utils.typing import *
 
-from extern.mvdream.model_zoo import build_model
-from extern.mvdream.camera_utils import normalize_camera
 
 @threestudio.register("mvdream-asynchronous-score-distillation-guidance")
 class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
@@ -33,7 +33,7 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
         ckpt_path: Optional[
             str
         ] = None  # path to local checkpoint (None for loading from url)
-        
+
         grad_clip: Optional[
             Any
         ] = None  # field(default_factory=lambda: [0, 2.0, 8.0, 1000])
@@ -52,7 +52,7 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
 
         camera_condition_type: str = "rotation"
         view_dependent_prompting: bool = False
-    
+
     cfg: Config
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -60,17 +60,18 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
         self.min_step = int(self.num_train_timesteps * min_step_percent)
         self.max_step = int(self.num_train_timesteps * max_step_percent)
 
-
     def configure(self) -> None:
         threestudio.info(f"Loading Multiview Diffusion ...")
 
-        self.model = build_model(self.cfg.model_name, ckpt_path=self.cfg.ckpt_path).to(self.device)
+        self.model = build_model(self.cfg.model_name, ckpt_path=self.cfg.ckpt_path).to(
+            self.device
+        )
         for p in self.model.parameters():
             p.requires_grad_(False)
 
         if hasattr(self.model, "cond_stage_model"):
             # delete unused models
-            del self.model.cond_stage_model # text encoder
+            del self.model.cond_stage_model  # text encoder
             cleanup()
 
         self.num_train_timesteps = 1000
@@ -84,7 +85,6 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
 
         # DDPM
         self.alphas = self.model.alphas_cumprod
-
 
     def get_camera_cond(
         self,
@@ -110,14 +110,14 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
             self.model.encode_first_stage(imgs)
         )
         return latents  # [B
-    
+
     def get_latents(
         self, rgb_BCHW: Float[Tensor, "B C H W"], rgb_as_latents=False
     ) -> Float[Tensor, "B 4 32 32"]:
         if rgb_as_latents:
             latents = F.interpolate(
                 rgb_BCHW, size=(32, 32), mode="bilinear", align_corners=False
-            ) # TODO: check if this is correct, or * 2.0 - 1.0
+            )  # TODO: check if this is correct, or * 2.0 - 1.0
         else:
             # rgb_BCHW_256 = F.interpolate(
             #     rgb_BCHW, size=(512, 512), mode="bilinear", align_corners=False
@@ -138,24 +138,19 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
 
         return latents
 
-    def get_t_plus(
-        self, 
-        t: Float[Tensor, "B"]
-    ):
-
+    def get_t_plus(self, t: Float[Tensor, "B"]):
         t_plus = self.cfg.plus_ratio * (t - self.min_step)
         if self.cfg.plus_random:
-            t_plus = (t_plus * torch.rand(*t.shape,device = self.device)).to(torch.long)
+            t_plus = (t_plus * torch.rand(*t.shape, device=self.device)).to(torch.long)
         else:
             t_plus = t_plus.to(torch.long)
         t_plus = t + t_plus
         t_plus = torch.clamp(
             t_plus,
-            1, # T_min
-            self.num_train_timesteps - 1, # T_max
+            1,  # T_min
+            self.num_train_timesteps - 1,  # T_max
         )
         return t_plus
-
 
     def __call__(
         self,
@@ -173,7 +168,6 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
         camera = c2w
         batch_size = rgb.shape[0]
 
-
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
         latents = self.get_latents(rgb_BCHW, rgb_as_latents=rgb_as_latents)
 
@@ -181,8 +175,6 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
         # noise = torch.randn_like(latents)[:batch_size // 4] # trick: this helps for using triplane-transformer with mv-dream
         # noise = noise.repeat_interleave(4, dim=0)
         noise = torch.randn_like(latents)
-        
-
 
         # prepare text embeddings
         text_embeddings = prompt_utils.get_text_embeddings(
@@ -190,15 +182,14 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
         )
         text_batch_size = text_embeddings.shape[0] // 2
         # double the prompt
-        text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat(batch_size // text_batch_size, 1, 1)
-        text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat(batch_size // text_batch_size, 1, 1)
+        text_embeddings_vd = text_embeddings[
+            0 * text_batch_size : 1 * text_batch_size
+        ].repeat(batch_size // text_batch_size, 1, 1)
+        text_embeddings_uncond = text_embeddings[
+            1 * text_batch_size : 2 * text_batch_size
+        ].repeat(batch_size // text_batch_size, 1, 1)
         text_embeddings = torch.cat(
-            [
-                text_embeddings_vd, 
-                text_embeddings_uncond, 
-                text_embeddings_vd
-            ], 
-            dim=0
+            [text_embeddings_vd, text_embeddings_uncond, text_embeddings_vd], dim=0
         )
 
         assert self.min_step is not None and self.max_step is not None
@@ -214,7 +205,7 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
             t = _t.repeat(batch_size)
             latents_noisy = self.model.q_sample(latents, t, noise=noise)
 
-            # bigger timestamp 
+            # bigger timestamp
             _t_plus = self.get_t_plus(_t)
             t_plus = _t_plus.repeat(batch_size)
 
@@ -237,7 +228,7 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
                 ],
                 dim=0,
             )
-                    
+
             # the following is different from stable-diffusion ###
             # save input tensors for UNet
             if camera is not None:
@@ -252,20 +243,18 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
                 context = {"context": text_embeddings}
 
             noise_pred = self.model.apply_model(
-                latents_model_input, 
+                latents_model_input,
                 t_expand,
                 context,
             )
 
         # perform guidance
-        noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(
-            3
-        )
+        noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(3)
         noise_pred_first = noise_pred_uncond + self.cfg.guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
         noise_pred_second = noise_pred_text_second
-        
+
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
             w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
@@ -277,7 +266,7 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
             raise ValueError(
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
-            
+
         grad = (noise_pred_first - noise_pred_second) * w
         grad = torch.nan_to_num(grad)
         # clip grad for stability?
@@ -294,12 +283,10 @@ class MVDreamTimestepShiftedScoreDistillationGuidance(BaseObject):
             "grad_norm": grad.norm(),
             "min_step": self.min_step,
             "max_step": self.max_step,
-        } 
+        }
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         min_step_percent = C(self.cfg.min_step_percent, epoch, global_step)
         max_step_percent = C(self.cfg.max_step_percent, epoch, global_step)
         self.min_step = int(self.num_train_timesteps * min_step_percent)
         self.max_step = int(self.num_train_timesteps * max_step_percent)
-        
-

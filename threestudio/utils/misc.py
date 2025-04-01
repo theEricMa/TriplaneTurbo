@@ -18,7 +18,7 @@ def parse_version(ver: str):
 def get_rank(opposite=False):
     # SLURM_PROCID can be set even if SLURM is not managing the multiprocessing,
     # therefore LOCAL_RANK needs to be checked first
-    rank_keys = ("JSM_NAMESPACE_RANK", "SLURM_PROCID", "LOCAL_RANK",  "RANK")
+    rank_keys = ("JSM_NAMESPACE_RANK", "SLURM_PROCID", "LOCAL_RANK", "RANK")
     if opposite:
         rank_keys = rank_keys[::-1]
     # opposite order of priority

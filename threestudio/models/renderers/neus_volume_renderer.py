@@ -232,7 +232,7 @@ class NeuSVolumeRenderer(VolumeRenderer):
                         positions.reshape(-1, 3),
                         output_normal=False,
                     )
-                
+
                     inv_std = self.variance(geo_out["sdf"])
                     if self.cfg.use_volsdf:
                         density = volsdf_density(geo_out["sdf"], inv_std)
@@ -248,7 +248,7 @@ class NeuSVolumeRenderer(VolumeRenderer):
                         alpha = ((p + 1e-5) / (c + 1e-5)).clip(0.0, 1.0)
                         density = alpha / self.render_step_size
                         return density.reshape(positions.shape[:2])
-                
+
             t_starts_, t_ends_ = self.estimator.sampling(
                 prop_sigma_fns=[partial(prop_sigma_fn, proposal_network=self.geometry)],
                 prop_samples=[self.cfg.num_samples_per_ray_importance],

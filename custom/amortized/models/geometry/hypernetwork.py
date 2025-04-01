@@ -1,19 +1,20 @@
 import os
 from dataclasses import dataclass, field
-from omegaconf.listconfig import ListConfig
-from omegaconf.dictconfig import DictConfig
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from omegaconf.dictconfig import DictConfig
+from omegaconf.listconfig import ListConfig
 
 import threestudio
 from threestudio.models.geometry.base import BaseImplicitGeometry, contract_to_unisphere
-from threestudio.utils.misc import broadcast, get_rank, C
-from threestudio.utils.typing import *
-from threestudio.utils.ops import get_activation
 from threestudio.models.networks import get_encoding, get_mlp
+from threestudio.utils.misc import C, broadcast, get_rank
+from threestudio.utils.ops import get_activation
+from threestudio.utils.typing import *
+
 
 class LinearHyperNetwork(nn.Module):
     def __init__(
@@ -26,16 +27,17 @@ class LinearHyperNetwork(nn.Module):
         self.config = config
 
         self.c_dim = self.config["c_dim"]
-        self.out_dims = self.config.get("out_dims", 
+        self.out_dims = self.config.get(
+            "out_dims",
             {
                 "sdf_weights": [64, 1],
                 "feature_weights": [64, 3],
-            }
+            },
         )
 
         for key, val in self.out_dims.items():
             if isinstance(val, ListConfig):
-                val = [v for v in val] # convert to list
+                val = [v for v in val]  # convert to list
             if isinstance(val, list):
                 self.out_dims[key] = [n_input_dims] + val
             else:
@@ -57,21 +59,31 @@ class LinearHyperNetwork(nn.Module):
         )
 
         layers = [
-            self.make_linear(self.c_dim, self.n_neurons, is_first=True, is_last=False, has_bias=False),
+            self.make_linear(
+                self.c_dim, self.n_neurons, is_first=True, is_last=False, has_bias=False
+            ),
             nn.LayerNorm(self.n_neurons),
             self.make_activation(),
         ]
         for i in range(self.n_hidden_layers - 1):
             layers += [
                 self.make_linear(
-                    self.n_neurons, self.n_neurons, is_first=False, is_last=False, has_bias=True
+                    self.n_neurons,
+                    self.n_neurons,
+                    is_first=False,
+                    is_last=False,
+                    has_bias=True,
                 ),
                 nn.LayerNorm(self.n_neurons),
                 self.make_activation(),
             ]
         layers += [
             self.make_linear(
-                self.n_neurons, self.n_output_dims, is_first=False, is_last=True, has_bias=True
+                self.n_neurons,
+                self.n_output_dims,
+                is_first=False,
+                is_last=True,
+                has_bias=True,
             ),
         ]
         self.layers = nn.Sequential(*layers)
@@ -92,23 +104,30 @@ class LinearHyperNetwork(nn.Module):
             params = []
             for in_channels, out_channels in zip(channels[:-1], channels[1:]):
                 end_idx = start_idx + in_channels * out_channels
-                params.append(out[:, start_idx:end_idx].reshape(*x.shape[:-1], in_channels, out_channels))
+                params.append(
+                    out[:, start_idx:end_idx].reshape(
+                        *x.shape[:-1], in_channels, out_channels
+                    )
+                )
                 start_idx = end_idx
             out_dict[item] = params
 
         return out_dict
 
     def make_linear(self, dim_in, dim_out, is_first, is_last, has_bias):
-        layer = nn.Linear(dim_in, dim_out, bias=has_bias) if not self.spectral_norm \
+        layer = (
+            nn.Linear(dim_in, dim_out, bias=has_bias)
+            if not self.spectral_norm
             else nn.utils.spectral_norm(nn.Linear(dim_in, dim_out, bias=has_bias))
+        )
         if has_bias:
             nn.init.zeros_(layer.bias)
-        nn.init.xavier_normal_(layer.weight, gain = 1.)
+        nn.init.xavier_normal_(layer.weight, gain=1.0)
         return layer
 
     def make_activation(self):
         # as recommended in att3d
-        return nn.SiLU(inplace=True) 
+        return nn.SiLU(inplace=True)
 
 
 @threestudio.register("Hypernet-sdf")
@@ -179,7 +198,7 @@ class Hypernet_Sdf(BaseImplicitGeometry):
 
         if self.cfg.normal_type == "pred":
             raise NotImplementedError("normal_type == pred is not implemented yet.")
-        
+
         if self.cfg.isosurface_deformable_grid:
             assert (
                 self.cfg.isosurface_method == "mt"
@@ -192,7 +211,6 @@ class Hypernet_Sdf(BaseImplicitGeometry):
 
         self.finite_difference_normal_eps: Optional[float] = None
 
-
     def initialize_shape(self) -> None:
         if self.cfg.shape_init is None and not self.cfg.force_shape_init:
             return
@@ -201,7 +219,7 @@ class Hypernet_Sdf(BaseImplicitGeometry):
         if self.cfg.weights is not None and not self.cfg.force_shape_init:
             return
 
-        raise NotImplementedError # TODO
+        raise NotImplementedError  # TODO
 
     def get_shifted_sdf(
         self, points: Float[Tensor, "*N Di"], sdf: Float[Tensor, "*N 1"]
@@ -239,16 +257,22 @@ class Hypernet_Sdf(BaseImplicitGeometry):
         self,
         enc: Float[Tensor, "*N C"],
         params: Float[Tensor, "*N C_out"],
-        activation: Optional[Callable[[Float[Tensor, "*N C_out"]], Float[Tensor, "*N C_out"]]] = torch.relu,
-        output_activation: Optional[Callable[[Float[Tensor, "*N C_out"]], Float[Tensor, "*N C_out"]]] = None,
+        activation: Optional[
+            Callable[[Float[Tensor, "*N C_out"]], Float[Tensor, "*N C_out"]]
+        ] = torch.relu,
+        output_activation: Optional[
+            Callable[[Float[Tensor, "*N C_out"]], Float[Tensor, "*N C_out"]]
+        ] = None,
     ) -> Float[Tensor, "*N 1"]:
         if torch.is_tensor(params):
             params = [params]
-        
+
         for idx, p in enumerate(params):
             assert enc.shape[0] == p.shape[0]
             assert enc.shape[-1] == p.shape[1]
-            enc = torch.bmm(enc, p) # no bias is used, as is tested in the original code
+            enc = torch.bmm(
+                enc, p
+            )  # no bias is used, as is tested in the original code
 
             # apply activation
             if activation is not None and idx < len(params) - 1:
@@ -259,43 +283,38 @@ class Hypernet_Sdf(BaseImplicitGeometry):
         return enc
 
     def forward(
-        self, 
-        points: Float[Tensor, "*N Di"], 
+        self,
+        points: Float[Tensor, "*N Di"],
         space_cache: Dict,
-        output_normal: bool = False
+        output_normal: bool = False,
     ) -> Dict[str, Float[Tensor, "..."]]:
-        
         batch_size, n_points, n_dims = points.shape
         points_unscaled = points
         points = contract_to_unisphere(
-            points, 
-            self.bbox, 
-            self.unbounded
+            points, self.bbox, self.unbounded
         )  # points normalized to (1, 1)
 
         if output_normal and self.cfg.normal_type == "analytic":
             raise NotImplementedError("analytic normal is not implemented yet.")
 
-        enc = self.encoding(
-                points.view(-1, self.cfg.n_input_dims)
-            ).view(*points.shape[:-1], -1)
-        sdf = self.hypernet_forward(enc, space_cache["sdf_weights"]) # (B, N, 1)
+        enc = self.encoding(points.view(-1, self.cfg.n_input_dims)).view(
+            *points.shape[:-1], -1
+        )
+        sdf = self.hypernet_forward(enc, space_cache["sdf_weights"])  # (B, N, 1)
         sdf = self.get_shifted_sdf(points_unscaled, sdf)
-        output = {
-                "sdf": sdf.view(batch_size * n_points, 1) # reshape to [B*N, 1]
-            }
+        output = {"sdf": sdf.view(batch_size * n_points, 1)}  # reshape to [B*N, 1]
 
         if self.cfg.n_feature_dims > 0:
             features = self.hypernet_forward(enc, space_cache["feature_weights"])
             output.update(
-                    {
-                        "features": features.view(batch_size * n_points, self.cfg.n_feature_dims) # reshape to [B*N, n_feature_dims]
-                    }
-                )
+                {
+                    "features": features.view(
+                        batch_size * n_points, self.cfg.n_feature_dims
+                    )  # reshape to [B*N, n_feature_dims]
+                }
+            )
         if output_normal:
-            if (
-                self.cfg.normal_type == "finite_difference"
-                ):
+            if self.cfg.normal_type == "finite_difference":
                 assert self.finite_difference_normal_eps is not None
                 eps: float = self.finite_difference_normal_eps
                 offsets: Float[Tensor, "3 3"] = torch.as_tensor(
@@ -315,39 +334,41 @@ class Hypernet_Sdf(BaseImplicitGeometry):
                 )
             output.update(
                 {
-                    "normal": normal.view(batch_size * n_points, 3), # reshape to [B*N, 3]
-                    "shading_normal": normal.view(batch_size * n_points, 3), # reshape to [B*N, 3]
-                    "sdf_grad": sdf_grad.view(batch_size * n_points, 3), # reshape to [B*N, 3]
+                    "normal": normal.view(
+                        batch_size * n_points, 3
+                    ),  # reshape to [B*N, 3]
+                    "shading_normal": normal.view(
+                        batch_size * n_points, 3
+                    ),  # reshape to [B*N, 3]
+                    "sdf_grad": sdf_grad.view(
+                        batch_size * n_points, 3
+                    ),  # reshape to [B*N, 3]
                 }
             )
         return output
 
     def forward_sdf(
-        self, 
-        points: Float[Tensor, "*N Di"],
-        space_cache: Dict
+        self, points: Float[Tensor, "*N Di"], space_cache: Dict
     ) -> Float[Tensor, "*N 1"]:
         batch_size = points.shape[0]
         points_unscaled = points
 
         points = contract_to_unisphere(
-            points_unscaled,
-            self.bbox,
-            self.unbounded
-        ) # points normalized to (1, 1)
+            points_unscaled, self.bbox, self.unbounded
+        )  # points normalized to (1, 1)
 
-        enc = self.encoding(
-            points.view(-1, self.cfg.n_input_dims)
-        ).view(*points.shape[:-1], -1)
+        enc = self.encoding(points.view(-1, self.cfg.n_input_dims)).view(
+            *points.shape[:-1], -1
+        )
 
         sdf = self.hypernet_forward(
             enc.view(batch_size, -1, self.encoding.n_output_dims),
-            space_cache["sdf_weights"]
+            space_cache["sdf_weights"],
         ).view(*points.shape[:-1], -1)
 
         sdf = self.get_shifted_sdf(points_unscaled, sdf)
         return sdf
-        
+
     def forward_field(
         self,
         points: Float[Tensor, "*N Di"],
@@ -356,15 +377,11 @@ class Hypernet_Sdf(BaseImplicitGeometry):
         batch_size = points.shape[0]
         points_unscaled = points
 
-        points = contract_to_unisphere(
-            points_unscaled,
-            self.bbox,
-            self.unbounded
-        )
+        points = contract_to_unisphere(points_unscaled, self.bbox, self.unbounded)
 
-        enc = self.encoding(
-            points.view(-1, self.cfg.n_input_dims)
-        ).view(*points.shape[:-1], -1)
+        enc = self.encoding(points.view(-1, self.cfg.n_input_dims)).view(
+            *points.shape[:-1], -1
+        )
         sdf = self.hypernet_forward(enc, space_cache["sdf_weights"])
         sdf = self.get_shifted_sdf(points_unscaled, sdf)
         deformation: Optional[Float[Tensor, "*N 3"]] = None
@@ -379,28 +396,24 @@ class Hypernet_Sdf(BaseImplicitGeometry):
         return field - threshold
 
     def export(
-        self, 
-        points: Float[Tensor, "*N Di"], 
+        self,
+        points: Float[Tensor, "*N Di"],
         space_cache: Float[Tensor, "B 3 C//3 H W"],
-    **kwargs) -> Dict[str, Any]:
+        **kwargs,
+    ) -> Dict[str, Any]:
         # TODO: is this function correct?
         out: Dict[str, Any] = {}
         if self.cfg.n_feature_dims == 0:
             return out
         points_unscaled = points
-        points = contract_to_unisphere(
-            points_unscaled, 
-            self.bbox, 
-            self.unbounded
-        )
+        points = contract_to_unisphere(points_unscaled, self.bbox, self.unbounded)
 
-        enc = self.encoding(
-            points.view(-1, self.cfg.n_input_dims)
-        ).view(*points.shape[:-1], -1)
-        features = self.hypernet_forward(
-                enc, 
-                space_cache["feature_weights"]
-            ).view(*points.shape[:-1], self.cfg.n_feature_dims)
+        enc = self.encoding(points.view(-1, self.cfg.n_input_dims)).view(
+            *points.shape[:-1], -1
+        )
+        features = self.hypernet_forward(enc, space_cache["feature_weights"]).view(
+            *points.shape[:-1], self.cfg.n_feature_dims
+        )
 
         out.update(
             {
@@ -410,9 +423,7 @@ class Hypernet_Sdf(BaseImplicitGeometry):
         return out
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
-        if (
-            self.cfg.normal_type == "finite_difference"
-        ):
+        if self.cfg.normal_type == "finite_difference":
             if isinstance(self.cfg.finite_difference_normal_eps, float):
                 self.finite_difference_normal_eps = (
                     self.cfg.finite_difference_normal_eps
@@ -421,5 +432,3 @@ class Hypernet_Sdf(BaseImplicitGeometry):
             raise NotImplementedError(
                 f"normal_type == {self.cfg.normal_type} is not implemented yet."
             )
-        
-            

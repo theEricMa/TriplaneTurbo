@@ -3,13 +3,15 @@ from dataclasses import dataclass, field
 from typing import List
 
 import numpy as np
-import threestudio
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+import threestudio
 from extern.mvdream.camera_utils import convert_opengl_to_blender, normalize_camera
 from extern.mvdream.model_zoo import build_model
 from threestudio.models.prompt_processors.base import PromptProcessorOutput
+
 # from threestudio.utils.base import BaseModule
 from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, cleanup, parse_version
@@ -48,7 +50,9 @@ class MultiviewDiffusionGuidance(BaseObject):
     def configure(self) -> None:
         threestudio.info(f"Loading Multiview Diffusion ...")
 
-        self.model = build_model(self.cfg.model_name, ckpt_path=self.cfg.ckpt_path).to(self.device)
+        self.model = build_model(self.cfg.model_name, ckpt_path=self.cfg.ckpt_path).to(
+            self.device
+        )
         for p in self.model.parameters():
             p.requires_grad_(False)
 
@@ -116,14 +120,18 @@ class MultiviewDiffusionGuidance(BaseObject):
                 elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
             )
             text_batch_size = text_embeddings.shape[0] // 2
-            text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat(batch_size // text_batch_size, 1, 1)
-            text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat(batch_size // text_batch_size, 1, 1)
+            text_embeddings_vd = text_embeddings[
+                0 * text_batch_size : 1 * text_batch_size
+            ].repeat(batch_size // text_batch_size, 1, 1)
+            text_embeddings_uncond = text_embeddings[
+                1 * text_batch_size : 2 * text_batch_size
+            ].repeat(batch_size // text_batch_size, 1, 1)
             text_embeddings = torch.cat(
                 [
-                    text_embeddings_vd, 
-                    text_embeddings_uncond, 
-                ], 
-                dim=0
+                    text_embeddings_vd,
+                    text_embeddings_uncond,
+                ],
+                dim=0,
             )
 
         if input_is_latent:

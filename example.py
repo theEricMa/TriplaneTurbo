@@ -1,12 +1,15 @@
-import os
-import torch
 import argparse
+import os
 from typing import *
-from triplaneturbo import TriplaneTurboTextTo3DPipeline, TriplaneTurboTextTo3DPipelineConfig
+
+import torch
 from diffusers import StableDiffusionPipeline
+
+from triplaneturbo import (
+    TriplaneTurboTextTo3DPipeline,
+    TriplaneTurboTextTo3DPipelineConfig,
+)
 from triplaneturbo.utils.mesh_exporter import export_obj
-
-
 
 # Initialize configuration and parameters
 prompt = "a beautiful girl"
@@ -17,7 +20,9 @@ seed = 42
 device = "cuda"
 
 # Initialize the TriplaneTurbo pipeline
-triplane_turbo_pipeline = TriplaneTurboTextTo3DPipeline.from_pretrained(adapter_name_or_path)
+triplane_turbo_pipeline = TriplaneTurboTextTo3DPipeline.from_pretrained(
+    adapter_name_or_path
+)
 triplane_turbo_pipeline.to(device)
 
 # Run the pipeline
@@ -34,4 +39,3 @@ for i, mesh in enumerate(output["mesh"]):
     name = f"{prompt.replace(' ', '_')}_{i}"
     save_paths = export_obj(mesh, f"{output_dir}/{name}.obj")
     print(f"Saved mesh to: {save_paths}")
-    

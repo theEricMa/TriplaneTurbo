@@ -1,15 +1,24 @@
 import bisect
+import json
 import math
+import os
 import random
 from dataclasses import dataclass, field
 
+import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, IterableDataset
-import pytorch_lightning as pl
-import os
+
 import threestudio
+from threestudio import register
+from threestudio.data.uncond import (
+    RandomCameraDataModuleConfig,
+    RandomCameraDataset,
+    RandomCameraIterableDataset,
+)
 from threestudio.utils.base import Updateable
+from threestudio.utils.config import parse_structured
 from threestudio.utils.ops import (
     get_mvp_matrix,
     get_projection_matrix,
@@ -17,14 +26,7 @@ from threestudio.utils.ops import (
     get_rays,
 )
 from threestudio.utils.typing import *
-from threestudio import register
-from threestudio.data.uncond import (
-    RandomCameraDataModuleConfig,
-    RandomCameraDataset,
-    RandomCameraIterableDataset,
-)
-import json
-from threestudio.utils.config import parse_structured
+
 
 @dataclass
 class MultiviewMultipromptDualRendererDataModuleConfig:
@@ -32,19 +34,22 @@ class MultiviewMultipromptDualRendererDataModuleConfig:
     # but OmegaConf does not support Union of containers
     batch_size: Any = 1
     eval_batch_size: int = 1
-    n_val_views: int = 1 
-    n_test_views: int = 32 
-    n_view:int=4
+    n_val_views: int = 1
+    n_test_views: int = 32
+    n_view: int = 4
     # relative_radius: bool = True
-    height: int =256
-    width: int =256
+    height: int = 256
+    width: int = 256
     ray_height: int = 64
     ray_width: int = 64
     resolution_milestones: List[int] = field(default_factory=lambda: [])
     # camera ranges are randomized, not specified
     elevation_range: Tuple[float, float] = (-10, 90)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
-    fovy_range: Tuple[float, float] = (40, 70,)
+    fovy_range: Tuple[float, float] = (
+        40,
+        70,
+    )
     azimuth_range: Tuple[float, float] = (-180, 180)
     light_distance_range: Tuple[float, float] = (0.8, 1.5)
     relative_radius: bool = True
@@ -56,18 +61,24 @@ class MultiviewMultipromptDualRendererDataModuleConfig:
     eval_fovy_deg: float = 70.0
     # new config for generative model optimization
     dim_gaussian: List[int] = field(default_factory=lambda: [])
-    pure_zeros: bool = False # return pure zeros for the latent code, instead of random noise
+    pure_zeros: bool = (
+        False  # return pure zeros for the latent code, instead of random noise
+    )
     prompt_library: str = "magic3d_prompt_library"
     prompt_library_dir: str = "load"
     prompt_library_format: str = "json"
     eval_prompt: Optional[str] = None
     target_prompt: Optional[str] = None
-    eval_fix_camera: Optional[int] = None # can be int, then fix the camera to the specified view
+    eval_fix_camera: Optional[
+        int
+    ] = None  # can be int, then fix the camera to the specified view
     # prompt processor configs
 
 
 class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
-    def __init__(self, cfg: Any, split: str, prompt_library: List, prompt_processor = None) -> None:
+    def __init__(
+        self, cfg: Any, split: str, prompt_library: List, prompt_processor=None
+    ) -> None:
         super().__init__()
         self.cfg: MultiviewMultipromptDualRendererDataModuleConfig = cfg
         ##############################################################################################################
@@ -84,12 +95,22 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             else self.cfg.batch_size
         )
         self.ray_heights: List[int] = (
-            [self.cfg.ray_height] if isinstance(self.cfg.ray_height, int) else self.cfg.ray_height
+            [self.cfg.ray_height]
+            if isinstance(self.cfg.ray_height, int)
+            else self.cfg.ray_height
         )
         self.ray_widths: List[int] = (
-            [self.cfg.ray_width] if isinstance(self.cfg.ray_width, int) else self.cfg.ray_width
+            [self.cfg.ray_width]
+            if isinstance(self.cfg.ray_width, int)
+            else self.cfg.ray_width
         )
-        assert len(self.heights) == len(self.widths) == len(self.batch_sizes) == len(self.ray_heights) == len(self.ray_widths)
+        assert (
+            len(self.heights)
+            == len(self.widths)
+            == len(self.batch_sizes)
+            == len(self.ray_heights)
+            == len(self.ray_widths)
+        )
         self.resolution_milestones: List[int]
         if (
             len(self.heights) == 1
@@ -123,13 +144,15 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         self.ray_height: int = self.ray_heights[0]
         self.ray_width: int = self.ray_widths[0]
         self.directions_unit_focal = self.directions_unit_focals[0]
-        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[0]
+        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[
+            0
+        ]
         # the following config is fixed for the whole training process
         self.elevation_range: Tuple[float, float] = self.cfg.elevation_range
         self.azimuth_range: Tuple[float, float] = self.cfg.azimuth_range
         self.camera_distance_range: Tuple[float, float] = self.cfg.camera_distance_range
         self.fovy_range: Tuple[float, float] = self.cfg.fovy_range
-        
+
         ##############################################################################################################
         # the following config is related to the prompt library
         self.prompt_library: Dict = prompt_library
@@ -143,7 +166,6 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         assert split in ["train", "val", "test"]
         self.split = split
 
-
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         size_index = bisect.bisect_right(self.resolution_milestones, global_step) - 1
         self.batch_size = self.batch_sizes[size_index]
@@ -152,23 +174,23 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         self.ray_height = self.ray_heights[size_index]
         self.ray_width = self.ray_widths[size_index]
         self.directions_unit_focal = self.directions_unit_focals[size_index]
-        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[size_index]
+        self._directions_unit_focal_rasterize = self._directions_unit_focals_rasterize[
+            size_index
+        ]
         threestudio.debug(
             f"Updated batch_size={self.batch_size}, height={self.height}, width={self.width}, ray_height={self.ray_height}, ray_width={self.ray_width}"
         )
 
     def __len__(self) -> int:
         return len(self.prompt_library)
-    
+
     def __getitem__(self, index: int) -> Dict:
         # load the prompt
-        return {
-            "prompt": self.prompt_library[index]
-        }
-    
+        return {"prompt": self.prompt_library[index]}
+
     def _light_position(self, camera_positions: Float[Tensor, "B 3"]):
         real_batch_size = self.batch_size // self.cfg.n_view
-        
+
         # sample light distance from a uniform distribution bounded by light_distance_range
         light_distances: Float[Tensor, "B"] = (
             torch.rand(real_batch_size)
@@ -247,7 +269,7 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         # default camera up direction as +z
         up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[
             None, :
-        ].repeat(self.cfg.eval_batch_size, 1) 
+        ].repeat(self.cfg.eval_batch_size, 1)
         light_positions: Float[Tensor, "B 3"] = camera_positions
 
         lookat: Float[Tensor, "B 3"] = F.normalize(center - camera_positions, dim=-1)
@@ -271,9 +293,11 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
 
-        directions_rasterize: Float[Tensor, "B H W 3"] = self._directions_unit_focal_rasterize[
-            None, :, :, :
-        ].repeat(n_views, 1, 1, 1)
+        directions_rasterize: Float[
+            Tensor, "B H W 3"
+        ] = self._directions_unit_focal_rasterize[None, :, :, :].repeat(
+            n_views, 1, 1, 1
+        )
         directions_rasterize[:, :, :, :2] = (
             directions_rasterize[:, :, :, :2] / focal_length[:, None, None, None]
         )
@@ -302,10 +326,12 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": torch.randn(1, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(1, *self.cfg.dim_gaussian),
-            "rays_d_rasterize":  rays_d_rasterize
+            "noise": torch.randn(1, *self.cfg.dim_gaussian)
+            if not self.cfg.pure_zeros
+            else torch.zeros(1, *self.cfg.dim_gaussian),
+            "rays_d_rasterize": rays_d_rasterize,
         }
-    
+
     def _train_collate(self, batch) -> Dict[str, Any]:
         assert (
             self.batch_size % self.cfg.n_view == 0
@@ -317,9 +343,9 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
         ##############################################################################################################
         # sample elevation angles
         elevation_deg: Float[Tensor, "B"] = (
-                torch.rand(real_batch_size)
-                * (self.elevation_range[1] - self.elevation_range[0])
-                + self.elevation_range[0]
+            torch.rand(real_batch_size)
+            * (self.elevation_range[1] - self.elevation_range[0])
+            + self.elevation_range[0]
         ).repeat_interleave(self.cfg.n_view, dim=0)
         elevation: Float[Tensor, "B"] = elevation_deg * math.pi / 180
 
@@ -401,9 +427,11 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
 
-        directions_rasterize: Float[Tensor, "B H W 3"] = self._directions_unit_focal_rasterize[
-            None, :, :, :
-        ].repeat(self.batch_size, 1, 1, 1)
+        directions_rasterize: Float[
+            Tensor, "B H W 3"
+        ] = self._directions_unit_focal_rasterize[None, :, :, :].repeat(
+            self.batch_size, 1, 1, 1
+        )
         directions_rasterize[:, :, :, :2] = (
             directions_rasterize[:, :, :, :2] / focal_length[:, None, None, None]
         )
@@ -431,8 +459,10 @@ class MultiviewMultipromptDualRendererDataset(Dataset, Updateable):
             "width": self.width,
             "fovy": fovy_deg,
             "prompt": prompts,
-            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian) if not self.cfg.pure_zeros else torch.zeros(real_batch_size, *self.cfg.dim_gaussian),
-            "rays_d_rasterize":  rays_d_rasterize
+            "noise": torch.randn(real_batch_size, *self.cfg.dim_gaussian)
+            if not self.cfg.pure_zeros
+            else torch.zeros(real_batch_size, *self.cfg.dim_gaussian),
+            "rays_d_rasterize": rays_d_rasterize,
         }
 
 
@@ -442,27 +472,26 @@ class MultiviewRandomCameraDataModule(pl.LightningDataModule):
 
     def __init__(self, cfg: Optional[Union[dict, DictConfig]] = None) -> None:
         super().__init__()
-        self.cfg = parse_structured(MultiviewMultipromptDualRendererDataModuleConfig, cfg)
-        path = os.path.join(
-            self.cfg.prompt_library_dir, 
-            self.cfg.prompt_library) \
-                + "." + self.cfg.prompt_library_format
-        
+        self.cfg = parse_structured(
+            MultiviewMultipromptDualRendererDataModuleConfig, cfg
+        )
+        path = (
+            os.path.join(self.cfg.prompt_library_dir, self.cfg.prompt_library)
+            + "."
+            + self.cfg.prompt_library_format
+        )
+
         with open(path, "r") as f:
             self.prompt_library = json.load(f)
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
-            self.train_dataset =MultiviewMultipromptDualRendererDataset(
-                self.cfg, 
-                "train", 
-                prompt_library=self.prompt_library["train"]
+            self.train_dataset = MultiviewMultipromptDualRendererDataset(
+                self.cfg, "train", prompt_library=self.prompt_library["train"]
             )
         if stage in (None, "fit", "validate"):
             self.val_dataset = MultiviewMultipromptDualRendererDataset(
-                self.cfg, 
-                "val", 
-                prompt_library=self.prompt_library["val"]
+                self.cfg, "val", prompt_library=self.prompt_library["val"]
             )
         if stage in (None, "test", "predict"):
             if self.cfg.eval_prompt is not None:
@@ -470,9 +499,7 @@ class MultiviewRandomCameraDataModule(pl.LightningDataModule):
                 raise NotImplementedError
             else:
                 self.test_dataset = MultiviewMultipromptDualRendererDataset(
-                    self.cfg, 
-                    "test", 
-                    prompt_library=self.prompt_library["test"]
+                    self.cfg, "test", prompt_library=self.prompt_library["test"]
                 )
                 # todo, is it ok to use test_dataset for prediction?
 
@@ -482,28 +509,27 @@ class MultiviewRandomCameraDataModule(pl.LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             self.train_dataset,
-            batch_size=1, # not used
+            batch_size=1,  # not used
             collate_fn=self.train_dataset.collate,
         )
-    
+
     def val_dataloader(self) -> DataLoader:
         return DataLoader(
             self.val_dataset,
-            batch_size=1, # not used
+            batch_size=1,  # not used
             collate_fn=self.val_dataset.collate,
         )
-    
+
     def test_dataloader(self) -> DataLoader:
         return DataLoader(
             self.test_dataset,
-            batch_size=1, # not used
+            batch_size=1,  # not used
             collate_fn=self.test_dataset.collate,
         )
-    
+
     def predict_dataloader(self) -> DataLoader:
         return DataLoader(
             self.test_dataset,
-            batch_size=1, # not used
+            batch_size=1,  # not used
             collate_fn=self.test_dataset.collate,
         )
-    

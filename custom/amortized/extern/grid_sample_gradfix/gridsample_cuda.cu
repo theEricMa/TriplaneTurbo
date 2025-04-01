@@ -555,7 +555,7 @@ std::vector<torch::Tensor> grid_sample2d_cuda_grad2(
     torch::Tensor grad_grid = torch::zeros_like(grid, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
 
     int64_t count = batch_size * H_OUT * W_OUT;
- 
+
     if (count > 0) {
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "grid_sampler_2d_grad2_cuda", [&] {
           if (canUse32BitIndexMath(input) && canUse32BitIndexMath(grid) &&
@@ -594,7 +594,7 @@ std::vector<torch::Tensor> grid_sample2d_cuda_grad2(
           }
         });
     }
-  
+
   return {grad_grad_output, grad_input, grad_grid};
 }
 

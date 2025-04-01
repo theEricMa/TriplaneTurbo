@@ -1,22 +1,21 @@
+from collections import defaultdict
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from threestudio.utils.typing import *
-from collections import defaultdict
 
 
 @torch.cuda.amp.autocast(enabled=False)
-def near_far_from_bound(rays_o, rays_d, bound, type='sphere', min_near=0.05):
+def near_far_from_bound(rays_o, rays_d, bound, type="sphere", min_near=0.05):
     # rays: [B, N, 3], [B, N, 3]
     # bound: int, radius for ball or half-edge-length for cube
     # return near [B, N, 1], far [B, N, 1]
 
     radius = rays_o.norm(dim=-1, keepdim=True)
 
-
-
-    if type == 'sphere_general':
-
+    if type == "sphere_general":
         # Normalize the direction of the rays
         rays_d = F.normalize(rays_d, dim=-1)
 
@@ -37,14 +36,11 @@ def near_far_from_bound(rays_o, rays_d, bound, type='sphere', min_near=0.05):
         # Ensure that 'near' is not closer than 'min_near'
         near = torch.max(near, min_near * torch.ones_like(near))
 
-    elif type == 'sphere':
-
+    elif type == "sphere":
         near = radius - bound
         far = radius + bound
 
     return near, far
-
-
 
 
 def chunk_batch(func: Callable, chunk_size: int, *args, **kwargs) -> Any:
@@ -66,11 +62,15 @@ def chunk_batch(func: Callable, chunk_size: int, *args, **kwargs) -> Any:
         # the following line is 2/2 of the modification
         out_chunk = func(
             *[
-                arg[:, i : i + chunk_size] if isinstance(arg, torch.Tensor) and arg.ndim >= 2 and arg.shape[1] == B else arg
+                arg[:, i : i + chunk_size]
+                if isinstance(arg, torch.Tensor) and arg.ndim >= 2 and arg.shape[1] == B
+                else arg
                 for arg in args
             ],
             **{
-                k: arg[:, i : i + chunk_size] if isinstance(arg, torch.Tensor) and arg.ndim >= 2 and arg.shape[1] == B else arg
+                k: arg[:, i : i + chunk_size]
+                if isinstance(arg, torch.Tensor) and arg.ndim >= 2 and arg.shape[1] == B
+                else arg
                 for k, arg in kwargs.items()
             },
         )
@@ -103,7 +103,7 @@ def chunk_batch(func: Callable, chunk_size: int, *args, **kwargs) -> Any:
             # allow None in return value
             out_merged[k] = None
         elif all([isinstance(vv, torch.Tensor) for vv in v]):
-            out_merged[k] = torch.cat(v, dim=0) # TODO: check if this is correct
+            out_merged[k] = torch.cat(v, dim=0)  # TODO: check if this is correct
         else:
             raise TypeError(
                 f"Unsupported types in return value of func: {[type(vv) for vv in v if not isinstance(vv, torch.Tensor)]}"
@@ -115,6 +115,7 @@ def chunk_batch(func: Callable, chunk_size: int, *args, **kwargs) -> Any:
         return out_type([out_merged[i] for i in range(chunk_length)])
     elif out_type is dict:
         return out_merged
+
 
 @torch.no_grad()
 def sample_pdf(bins, weights, n_samples, det=False):
@@ -130,7 +131,9 @@ def sample_pdf(bins, weights, n_samples, det=False):
     cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
     # Take uniform samples
     if det:
-        u = torch.linspace(0. + 0.5 / n_samples, 1. - 0.5 / n_samples, steps=n_samples).to(weights.device)
+        u = torch.linspace(
+            0.0 + 0.5 / n_samples, 1.0 - 0.5 / n_samples, steps=n_samples
+        ).to(weights.device)
         u = u.expand(list(cdf.shape[:-1]) + [n_samples])
     else:
         u = torch.rand(list(cdf.shape[:-1]) + [n_samples]).to(weights.device)
@@ -146,7 +149,7 @@ def sample_pdf(bins, weights, n_samples, det=False):
     cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
     bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
 
-    denom = (cdf_g[..., 1] - cdf_g[..., 0])
+    denom = cdf_g[..., 1] - cdf_g[..., 0]
     denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
     t = (u - cdf_g[..., 0]) / denom
     samples = bins_g[..., 0] + t * (bins_g[..., 1] - bins_g[..., 0])

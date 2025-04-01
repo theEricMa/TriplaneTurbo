@@ -1,26 +1,26 @@
+import json
 import os
 import re
-import json
-from tqdm import tqdm
+from dataclasses import dataclass, field
+from time import time
+from typing import *
 
 import torch
-from typing import *
-from dataclasses import dataclass, field
 from diffusers import StableDiffusionPipeline
-
-from .base import Pipeline
-from ..models.geometry import StableDiffusionTriplaneDualAttention
-from ..utils.mesh_exporter import isosurface, colorize_mesh, DiffMarchingCubeHelper
-
 from diffusers.loaders import AttnProcsLayers
-from ..models.networks import get_activation
-
-from time import time
 from torch.cuda.amp import autocast
+from tqdm import tqdm
+
+from ..models.geometry import StableDiffusionTriplaneDualAttention
+from ..models.networks import get_activation
+from ..utils.mesh_exporter import DiffMarchingCubeHelper, colorize_mesh, isosurface
+from .base import Pipeline
+
 
 @dataclass
 class TriplaneTurboTextTo3DPipelineConfig:
     """Configuration for TriplaneTurboTextTo3DPipeline"""
+
     # Basic pipeline settings
     base_model_name_or_path: str = "pretrained/stable-diffusion-2-1-base"
 
@@ -29,10 +29,10 @@ class TriplaneTurboTextTo3DPipelineConfig:
     latent_channels: int = 4
     latent_height: int = 64
     latent_width: int = 64
-    
+
     # Training/sampling settings
     num_steps_sampling: int = 4
-    
+
     # Geometry settings
     radius: float = 1.0
     normal_type: str = "analytic"
@@ -44,8 +44,8 @@ class TriplaneTurboTextTo3DPipelineConfig:
     tex_interpolate: str = "v2"
     n_feature_dims: int = 3
 
-    sample_scheduler: str = "ddim" # any of "ddpm", "ddim"
-    
+    sample_scheduler: str = "ddim"  # any of "ddpm", "ddim"
+
     # Network settings
     mlp_network_config: dict = field(
         default_factory=lambda: {
@@ -60,7 +60,7 @@ class TriplaneTurboTextTo3DPipelineConfig:
     # Adapter settings
     space_generator_config: dict = field(
         default_factory=lambda: {
-            "training_type": "self_lora_rank_16-cross_lora_rank_16-locon_rank_16" ,
+            "training_type": "self_lora_rank_16-cross_lora_rank_16-locon_rank_16",
             "output_dim": 64,  # 32 * 2 for v1
             "self_lora_type": "hexa_v1",
             "cross_lora_type": "vanilla",
@@ -75,7 +75,9 @@ class TriplaneTurboTextTo3DPipelineConfig:
     color_activation: str = "sigmoid-mipnerf"
 
     @classmethod
-    def from_pretrained(cls, pretrained_path: str) -> "TriplaneTurboTextTo3DPipelineConfig":
+    def from_pretrained(
+        cls, pretrained_path: str
+    ) -> "TriplaneTurboTextTo3DPipelineConfig":
         """Load config from pretrained path"""
         config_path = os.path.join(pretrained_path, "config.json")
         if os.path.exists(config_path):
@@ -86,10 +88,12 @@ class TriplaneTurboTextTo3DPipelineConfig:
             print(f"No config file found at {pretrained_path}, using default config")
             return cls()  # Return default config if no config file found
 
+
 class TriplaneTurboTextTo3DPipeline(Pipeline):
     """
     A pipeline for converting text to 3D models using triplane representation.
     """
+
     config_name = "config.json"
 
     def __init__(
@@ -110,12 +114,11 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
         self.sample_scheduler = sample_scheduler
         self.isosurface_helper = isosurface_helper
 
-
         self.models = {
             "geometry": geometry,
             "base_pipeline": base_pipeline,
         }
-        
+
     @classmethod
     def from_pretrained(
         cls,
@@ -147,8 +150,9 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
         )
 
         # load sample scheduler
-        if config.sample_scheduler == "ddim":   
+        if config.sample_scheduler == "ddim":
             from diffusers import DDIMScheduler
+
             sample_scheduler = DDIMScheduler.from_pretrained(
                 config.base_model_name_or_path,
                 subfolder="scheduler",
@@ -158,10 +162,10 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
 
         # load geometry
         geometry = StableDiffusionTriplaneDualAttention(
-                config=config,
-                vae=base_pipeline.vae,
-                unet=base_pipeline.unet,
-            )
+            config=config,
+            vae=base_pipeline.vae,
+            unet=base_pipeline.unet,
+        )
 
         # no gradient for geometry
         for param in geometry.parameters():
@@ -178,8 +182,9 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
             if len(unused) > 0:
                 print(f"Unused keys: {unused}")
         else:
-            raise ValueError(f"Unknown pretrained model name or path: {pretrained_model_name_or_path}")
-
+            raise ValueError(
+                f"Unknown pretrained model name or path: {pretrained_model_name_or_path}"
+            )
 
         # load material, convert to int
         # material = lambda x: (256 * get_activation(config.color_activation)(x)).int()
@@ -198,23 +203,22 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
         )
         return pipeline
 
-
     def encode_prompt(
-        self, 
+        self,
         prompt: Union[str, List[str]],
         device: str,
         num_results_per_prompt: int = 1,
     ) -> torch.FloatTensor:
         """
         Encodes the prompt into text encoder hidden states.
-        
+
         Args:
             prompt: The prompt to encode.
             device: The device to use for encoding.
             num_results_per_prompt: Number of results to generate per prompt.
             do_classifier_free_guidance: Whether to use classifier-free guidance.
             negative_prompt: The negative prompt to encode.
-            
+
         Returns:
             text_embeddings: Text embeddings tensor.
         """
@@ -224,10 +228,10 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
             device=device,
             num_images_per_prompt=num_results_per_prompt,
             do_classifier_free_guidance=False,
-            negative_prompt=None
+            negative_prompt=None,
         )
         return text_embeddings
-        
+
     @torch.no_grad()
     def __call__(
         self,
@@ -242,7 +246,7 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
     ):
         # Implementation similar to Zero123Pipeline
         # Reference code from: https://github.com/zero123/zero123-diffusers
-        
+
         start_time = time()
         # Validate inputs
         if isinstance(prompt, str):
@@ -251,27 +255,26 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
         elif isinstance(prompt, list):
             batch_size = len(prompt)
         else:
-            raise ValueError(f"Prompt must be a string or list of strings, got {type(prompt)}")
-        
+            raise ValueError(
+                f"Prompt must be a string or list of strings, got {type(prompt)}"
+            )
+
         # Get the device from the first available module
 
         # Generate latents if not provided
         if latents is None:
             latents = torch.randn(
-                (batch_size * 6, 4, 32, 32), # hard-coded for now
+                (batch_size * 6, 4, 32, 32),  # hard-coded for now
                 generator=generator,
                 device=self.device,
             )
 
         # Process text prompt through geometry module
         text_embed, _ = self.encode_prompt(prompt, self.device, num_results_per_prompt)
-        
+
         # Run diffusion process
         # Set up timesteps for sampling
-        timesteps = self._set_timesteps(
-            self.sample_scheduler,
-            num_inference_steps
-        )
+        timesteps = self._set_timesteps(self.sample_scheduler, num_inference_steps)
 
         with autocast():
             with torch.no_grad():
@@ -279,8 +282,7 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
                 for i, t in tqdm(enumerate(timesteps)):
                     # Scale model input
                     noisy_latent_input = self.sample_scheduler.scale_model_input(
-                        latents, 
-                        t
+                        latents, t
                     )
 
                     # Predict noise/sample
@@ -297,7 +299,7 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
 
                 # Use final denoised latents
                 latents = latents_denoised
-                
+
                 # Generate final 3D representation
                 space_cache = self.geometry.decode(latents)
 
@@ -335,18 +337,19 @@ class TriplaneTurboTextTo3DPipeline(Pipeline):
         num_steps: int,
     ):
         """Set up timesteps for sampling.
-        
+
         Args:
             scheduler: The scheduler to use for timestep generation
             num_steps: Number of diffusion steps
-            
+
         Returns:
             timesteps: Tensor of timesteps to use for sampling
         """
         scheduler.set_timesteps(num_steps)
         timesteps_orig = scheduler.timesteps
         # Shift timesteps to start from T
-        timesteps_delta = scheduler.config.num_train_timesteps - 1 - timesteps_orig.max()
+        timesteps_delta = (
+            scheduler.config.num_train_timesteps - 1 - timesteps_orig.max()
+        )
         timesteps = timesteps_orig + timesteps_delta
         return timesteps
-

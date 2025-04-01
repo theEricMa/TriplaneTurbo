@@ -2,6 +2,7 @@ import json
 import os
 import re
 import shutil
+import threading
 
 import cv2
 import imageio
@@ -18,7 +19,6 @@ from pytorch_lightning.loggers import WandbLogger
 from threestudio.models.mesh import Mesh
 from threestudio.utils.typing import *
 
-import threading
 
 class SaverMixin:
     _save_dir: Optional[str] = None
@@ -440,7 +440,7 @@ class SaverMixin:
         fps=30,
         name: Optional[str] = None,
         step: Optional[int] = None,
-        multithreaded: bool = False
+        multithreaded: bool = False,
     ) -> str:
         assert save_format in ["gif", "mp4"]
         if not filename.endswith(save_format):
@@ -459,7 +459,9 @@ class SaverMixin:
             imgs = [cv2.cvtColor(i, cv2.COLOR_BGR2RGB) for i in imgs]
             if multithreaded:
                 # threestudio.info("Multithreaded gif saving: {}".format(save_path))
-                thread = threading.Thread(target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps})
+                thread = threading.Thread(
+                    target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps}
+                )
                 thread.start()
             else:
                 imageio.mimsave(save_path, imgs, fps=fps, palettesize=256)
@@ -467,7 +469,9 @@ class SaverMixin:
             imgs = [cv2.cvtColor(i, cv2.COLOR_BGR2RGB) for i in imgs]
             if multithreaded:
                 # threestudio.info("Multithreaded mp4 saving: {}".format(save_path))
-                thread = threading.Thread(target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps})
+                thread = threading.Thread(
+                    target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps}
+                )
                 thread.start()
             else:
                 imageio.mimsave(save_path, imgs, fps=fps)
@@ -503,7 +507,6 @@ class SaverMixin:
         map_Pr: Optional[Float[Tensor, "H W 1"]] = None,
         map_format: str = "jpg",
     ) -> List[str]:
-
         if not filename.endswith(".obj"):
             filename += ".obj"
         save_path = self.get_save_path(filename)
@@ -519,23 +522,22 @@ class SaverMixin:
             )
         if save_vertex_color:
             v_rgb = self.convert_data(mesh.v_rgb)
-            
+
         # use trimesh to save obj
         mesh = trimesh.Trimesh(
             vertices=v_pos,
             faces=t_pos_idx,
             vertex_normals=v_nrm,
             vertex_colors=v_rgb,
-            visual=trimesh.visual.TextureVisuals(
-                uv=v_tex,
-                face_uv=t_tex_idx
-            ) if save_uv else None
+            visual=trimesh.visual.TextureVisuals(uv=v_tex, face_uv=t_tex_idx)
+            if save_uv
+            else None,
         )
 
         # save the mesh to obj
         mesh.export(save_path)
         return [save_path]
-        
+
     # def save_obj(
     #     self,
     #     filename: str,

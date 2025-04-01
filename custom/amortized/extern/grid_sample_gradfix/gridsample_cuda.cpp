@@ -31,7 +31,7 @@ std::vector<torch::Tensor> grid_sample2d_grad2(
     const torch::Tensor &grid,
     bool padding_mode,
     bool align_corners) {
-  
+
   return at::native::grid_sample2d_cuda_grad2(grad2_grad_input, grad2_grad_grid,
                                   grad_output, input, grid, padding_mode, align_corners);
 }

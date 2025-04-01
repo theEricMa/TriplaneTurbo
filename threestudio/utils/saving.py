@@ -2,6 +2,7 @@ import json
 import os
 import re
 import shutil
+import threading
 
 import cv2
 import imageio
@@ -18,7 +19,6 @@ from pytorch_lightning.loggers import WandbLogger
 from threestudio.models.mesh import Mesh
 from threestudio.utils.typing import *
 
-import threading
 
 class SaverMixin:
     _save_dir: Optional[str] = None
@@ -440,7 +440,7 @@ class SaverMixin:
         fps=30,
         name: Optional[str] = None,
         step: Optional[int] = None,
-        multithreaded: bool = False
+        multithreaded: bool = False,
     ) -> str:
         assert save_format in ["gif", "mp4"]
         if not filename.endswith(save_format):
@@ -459,7 +459,9 @@ class SaverMixin:
             imgs = [cv2.cvtColor(i, cv2.COLOR_BGR2RGB) for i in imgs]
             if multithreaded:
                 # threestudio.info("Multithreaded gif saving: {}".format(save_path))
-                thread = threading.Thread(target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps})
+                thread = threading.Thread(
+                    target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps}
+                )
                 thread.start()
             else:
                 imageio.mimsave(save_path, imgs, fps=fps, palettesize=256)
@@ -467,7 +469,9 @@ class SaverMixin:
             imgs = [cv2.cvtColor(i, cv2.COLOR_BGR2RGB) for i in imgs]
             if multithreaded:
                 # threestudio.info("Multithreaded mp4 saving: {}".format(save_path))
-                thread = threading.Thread(target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps})
+                thread = threading.Thread(
+                    target=imageio.mimsave, args=(save_path, imgs), kwargs={"fps": fps}
+                )
                 thread.start()
             else:
                 imageio.mimsave(save_path, imgs, fps=fps)

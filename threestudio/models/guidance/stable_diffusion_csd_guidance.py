@@ -1,6 +1,6 @@
+import os
 from dataclasses import dataclass, field
 
-import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -112,7 +112,6 @@ class StableDiffusionClassifierGuidance(BaseObject):
 
             tomesd.apply_patch(self.unet, **self.cfg.token_merging_params)
 
-
         self.scheduler = DDIMScheduler.from_pretrained(
             self.cfg.pretrained_model_name_or_path,
             subfolder="scheduler",
@@ -135,8 +134,9 @@ class StableDiffusionClassifierGuidance(BaseObject):
         self.perpneg_scale = 0.0
 
         # load null text embbeding, copied from threestudio/models/prompt_processors/base.py
-        try: # single prompt
+        try:  # single prompt
             from threestudio.models.prompt_processors.base import hash_prompt
+
             def load_from_cache(prompt):
                 cache_path = os.path.join(
                     ".threestudio_cache/text_embeddings/"
@@ -147,16 +147,21 @@ class StableDiffusionClassifierGuidance(BaseObject):
                 #         f"Text embedding file {cache_path} for model {self.cfg.pretrained_model_name_or_path} and prompt [{prompt}] not found, you can first run tasks other csd to generate it."
                 #     )
                 return torch.load(cache_path, map_location=self.device)
-            self.null_text_embeddings = load_from_cache("") # the null prompt in vsd
+
+            self.null_text_embeddings = load_from_cache("")  # the null prompt in vsd
         except:
-            from stabledreamer.models.prompt_processors.utils import load_from_cache,  hash_prompt
+            from stabledreamer.models.prompt_processors.utils import (
+                hash_prompt,
+                load_from_cache,
+            )
+
             # cache_dir, pretrained_model_name_or_path, prompt, load_local=False, load_global=False
             self.null_text_embeddings = load_from_cache(
                 self.cfg.cache_dir,
                 self.cfg.pretrained_model_name_or_path,
                 "",
                 load_local=True,
-                load_global=False
+                load_global=False,
             )
 
         threestudio.info(f"Loaded Stable Diffusion!")
@@ -227,8 +232,10 @@ class StableDiffusionClassifierGuidance(BaseObject):
             # append the null text embedding for csd
             text_embeddings = torch.cat(
                 [
-                    text_embeddings, 
-                    self.null_text_embeddings.expand(batch_size, -1, -1).to(self.device)
+                    text_embeddings,
+                    self.null_text_embeddings.expand(batch_size, -1, -1).to(
+                        self.device
+                    ),
                 ],
                 dim=0,
             )
@@ -242,10 +249,10 @@ class StableDiffusionClassifierGuidance(BaseObject):
                     encoder_hidden_states=text_embeddings,
                 )  # (4B, 3, 64, 64)
 
-            noise_pred_text   = noise_pred[batch_size * 0: batch_size * 1]
-            noise_pred_uncond = noise_pred[batch_size * 1: batch_size * 2]
-            noise_pred_neg    = noise_pred[batch_size * 2: batch_size * 4]
-            noise_pred_null   = noise_pred[batch_size * 4: batch_size * 5]
+            noise_pred_text = noise_pred[batch_size * 0 : batch_size * 1]
+            noise_pred_uncond = noise_pred[batch_size * 1 : batch_size * 2]
+            noise_pred_neg = noise_pred[batch_size * 2 : batch_size * 4]
+            noise_pred_null = noise_pred[batch_size * 4 : batch_size * 5]
 
             e_pos = noise_pred_text - noise_pred_uncond
             accum_grad = 0
@@ -265,8 +272,10 @@ class StableDiffusionClassifierGuidance(BaseObject):
             # append the null text embedding for csd
             text_embeddings = torch.cat(
                 [
-                    text_embeddings, 
-                    self.null_text_embeddings.expand(batch_size, -1, -1).to(self.device)
+                    text_embeddings,
+                    self.null_text_embeddings.expand(batch_size, -1, -1).to(
+                        self.device
+                    ),
                 ],
                 dim=0,
             )
@@ -298,15 +307,15 @@ class StableDiffusionClassifierGuidance(BaseObject):
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
 
-        grad = w * (self.cond_scale * noise_pred_text
-                + self.uncond_scale * noise_pred_uncond
-                + self.null_scale * noise_pred_null
-                + self.noise_scale * noise
-            )
+        grad = w * (
+            self.cond_scale * noise_pred_text
+            + self.uncond_scale * noise_pred_uncond
+            + self.null_scale * noise_pred_null
+            + self.noise_scale * noise
+        )
 
         if prompt_utils.use_perp_neg:
-                grad += w * self.perpneg_scale * noise_pred_perpneg
-                
+            grad += w * self.perpneg_scale * noise_pred_perpneg
 
         guidance_eval_utils = {
             "use_perp_neg": prompt_utils.use_perp_neg,
@@ -318,7 +327,6 @@ class StableDiffusionClassifierGuidance(BaseObject):
         }
 
         return grad, guidance_eval_utils
-
 
     def __call__(
         self,
@@ -354,7 +362,6 @@ class StableDiffusionClassifierGuidance(BaseObject):
             dtype=torch.long,
             device=self.device,
         )
-
 
         grad, guidance_eval_utils = self.compute_grad_csd(
             latents, t, prompt_utils, elevation, azimuth, camera_distances
@@ -426,9 +433,7 @@ class StableDiffusionClassifierGuidance(BaseObject):
                     -1, 1, 1, 1
                 ) * perpendicular_component(e_i_neg, e_pos)
 
-            noise_pred = noise_pred_uncond + self.cfg.cond_scale * (
-                e_pos + accum_grad
-            )
+            noise_pred = noise_pred_uncond + self.cfg.cond_scale * (e_pos + accum_grad)
         else:
             # pred noise
             latent_model_input = torch.cat([latents_noisy] * 2, dim=0)

@@ -9,12 +9,12 @@ import torch.nn.functional as F
 import threestudio
 from threestudio.models.geometry.base import BaseImplicitGeometry
 from threestudio.models.mesh import Mesh
-from threestudio.utils.misc import broadcast, get_rank, C
+from threestudio.models.networks import get_encoding, get_mlp
+from threestudio.utils.misc import C, broadcast, get_rank
+from threestudio.utils.ops import get_activation
 from threestudio.utils.typing import *
 
 from ..geometry.utils import contract_to_unisphere_custom, sample_from_planes
-from threestudio.utils.ops import get_activation
-from threestudio.models.networks import get_encoding, get_mlp
 
 
 @threestudio.register("Triplane-transformer-sdf")
@@ -42,7 +42,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
                 "activation": "ReLU",
                 "output_activation": "none",
                 "n_neurons": 64,
-                "n_hidden_layers": 2, 
+                "n_hidden_layers": 2,
             }
         )
 
@@ -64,7 +64,10 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
 
         # set up the space generator
         if self.cfg.backbone == "triplane_transformer":
-            from ...extern.triplane_transformer_modules import TriplaneTransformer as Generator
+            from ...extern.triplane_transformer_modules import (
+                TriplaneTransformer as Generator,
+            )
+
             self.space_generator = Generator(**self.cfg.space_generator_config)
         else:
             raise ValueError(f"Unknown backbone {self.cfg.backbone}")
@@ -93,7 +96,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
                 self.cfg.mlp_network_config,
             )
 
-        self.noise_dim = None # not used
+        self.noise_dim = None  # not used
         self.finite_difference_normal_eps: Optional[float] = None
 
     def initialize_shape(self) -> None:
@@ -102,9 +105,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
 
     # this function is similar to the one in threestudio/models/geometry/impcit_sdf.py
     def get_shifted_sdf(
-        self, 
-        points: Float[Tensor, "*N Di"], 
-        sdf: Float[Tensor, "*N 1"]
+        self, points: Float[Tensor, "*N Di"], sdf: Float[Tensor, "*N 1"]
     ) -> Float[Tensor, "*N 1"]:
         sdf_bias: Union[float, Float[Tensor, "*N 1"]]
         if self.cfg.sdf_bias == "ellipsoid":
@@ -132,7 +133,7 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         text_embed: Float[Tensor, "B C"],
     ) -> Any:
         output = self.space_generator(
-            text_embed = text_embed,
+            text_embed=text_embed,
         )
         return output
 
@@ -143,22 +144,18 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
     ):
         batch_size, n_points, n_dims = points.shape
         # the following code is similar to EG3D / OpenLRM
-        
+
         return sample_from_planes(
-            plane_features = space_cache,
-            coordinates = points,
-        ).view(*points.shape[:-1],-1)
-        
+            plane_features=space_cache,
+            coordinates=points,
+        ).view(*points.shape[:-1], -1)
+
     def rescale_points(
         self,
         points: Float[Tensor, "*N Di"],
     ):
         # transform points from original space to [-1, 1]^3
-        points = contract_to_unisphere_custom(
-            points, 
-            self.bbox, 
-            self.unbounded
-        )
+        points = contract_to_unisphere_custom(points, self.bbox, self.unbounded)
         return points
 
     def forward(
@@ -167,7 +164,6 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         space_cache: Any,
         output_normal: bool = False,
     ) -> Dict[str, Float[Tensor, "..."]]:
-
         batch_size, n_points, n_dims = points.shape
         points_unscaled = points
         points = self.rescale_points(points)
@@ -178,23 +174,22 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         enc = self.interpolate_encodings(points, space_cache)
         sdf = self.sdf_network(enc).view(*points.shape[:-1], 1)
         sdf = self.get_shifted_sdf(points_unscaled, sdf)
-        output = {
-                "sdf": sdf.view(batch_size * n_points, 1) # reshape to [B*N, 1]
-            }
+        output = {"sdf": sdf.view(batch_size * n_points, 1)}  # reshape to [B*N, 1]
 
         if self.cfg.n_feature_dims > 0:
             features = self.feature_network(enc).view(
-                *points.shape[:-1], self.cfg.n_feature_dims)
+                *points.shape[:-1], self.cfg.n_feature_dims
+            )
             output.update(
-                    {
-                        "features": features.view(batch_size * n_points, self.cfg.n_feature_dims) # reshape to [B*N, n_feature_dims]
-                    }
-                )
+                {
+                    "features": features.view(
+                        batch_size * n_points, self.cfg.n_feature_dims
+                    )  # reshape to [B*N, n_feature_dims]
+                }
+            )
 
         if output_normal:
-            if (
-                self.cfg.normal_type == "finite_difference"
-                ):
+            if self.cfg.normal_type == "finite_difference":
                 assert self.finite_difference_normal_eps is not None
                 eps: float = self.finite_difference_normal_eps
                 offsets: Float[Tensor, "3 3"] = torch.as_tensor(
@@ -214,9 +209,15 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
                 )
             output.update(
                 {
-                    "normal": normal.view(batch_size * n_points, 3), # reshape to [B*N, 3]
-                    "shading_normal": normal.view(batch_size * n_points, 3), # reshape to [B*N, 3]
-                    "sdf_grad": sdf_grad.view(batch_size * n_points, 3), # reshape to [B*N, 3]
+                    "normal": normal.view(
+                        batch_size * n_points, 3
+                    ),  # reshape to [B*N, 3]
+                    "shading_normal": normal.view(
+                        batch_size * n_points, 3
+                    ),  # reshape to [B*N, 3]
+                    "sdf_grad": sdf_grad.view(
+                        batch_size * n_points, 3
+                    ),  # reshape to [B*N, 3]
                 }
             )
         return output
@@ -227,15 +228,16 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         space_cache: Float[Tensor, "B 3 C//3 H W"],
     ) -> Float[Tensor, "*N 1"]:
         batch_size = points.shape[0]
-        assert points.shape[0] == batch_size, "points and space_cache should have the same batch size in forward_sdf"
+        assert (
+            points.shape[0] == batch_size
+        ), "points and space_cache should have the same batch size in forward_sdf"
         points_unscaled = points
 
         points = self.rescale_points(points)
 
         # sample from planes
         enc = self.interpolate_encodings(
-            points.reshape(batch_size, -1, 3),
-            space_cache
+            points.reshape(batch_size, -1, 3), space_cache
         ).reshape(*points.shape[:-1], -1)
         sdf = self.sdf_network(enc).reshape(*points.shape[:-1], 1)
 
@@ -243,19 +245,21 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         return sdf
 
     def forward_field(
-        self, 
+        self,
         points: Float[Tensor, "*N Di"],
         space_cache: Float[Tensor, "B 3 C//3 H W"],
     ) -> Tuple[Float[Tensor, "*N 1"], Optional[Float[Tensor, "*N 3"]]]:
         # TODO: is this function correct?
         batch_size = points.shape[0]
-        assert points.shape[0] == batch_size, "points and space_cache should have the same batch size in forward_sdf"
+        assert (
+            points.shape[0] == batch_size
+        ), "points and space_cache should have the same batch size in forward_sdf"
         points_unscaled = points
 
         points = self.rescale_points(points)
 
         # sample from planes
-        enc = self.interpolate_encodings(points, space_cache)      
+        enc = self.interpolate_encodings(points, space_cache)
         sdf = self.sdf_network(enc).reshape(*points.shape[:-1], 1)
         sdf = self.get_shifted_sdf(points_unscaled, sdf)
         deformation: Optional[Float[Tensor, "*N 3"]] = None
@@ -270,10 +274,11 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
         return field - threshold
 
     def export(
-        self, 
-        points: Float[Tensor, "*N Di"], 
+        self,
+        points: Float[Tensor, "*N Di"],
         space_cache: Float[Tensor, "B 3 C//3 H W"],
-    **kwargs) -> Dict[str, Any]:
+        **kwargs,
+    ) -> Dict[str, Any]:
         # TODO: is this function correct?
         out: Dict[str, Any] = {}
         if self.cfg.n_feature_dims == 0:
@@ -292,11 +297,9 @@ class TriplaneTransformerSDF(BaseImplicitGeometry):
             }
         )
         return out
-    
+
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
-        if (
-            self.cfg.normal_type == "finite_difference"
-        ):
+        if self.cfg.normal_type == "finite_difference":
             if isinstance(self.cfg.finite_difference_normal_eps, float):
                 self.finite_difference_normal_eps = (
                     self.cfg.finite_difference_normal_eps

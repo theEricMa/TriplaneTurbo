@@ -1,39 +1,36 @@
 import json
 import os
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
+from functools import partial
+from itertools import cycle
 
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
-
-import threestudio
-from threestudio.utils.base import BaseObject
-from threestudio.utils.typing import *
-from threestudio.utils.misc import barrier, cleanup
-
-from functools import partial
-
-from threestudio.models.prompt_processors.base import (
-    DirectionConfig, shift_azimuth_deg, PromptProcessorOutput,
-    shifted_expotional_decay
-)
-from threestudio.utils.misc import get_rank
-
-from itertools import cycle
-from .utils import hash_prompt, hash_image, _load_image_embedding, _load_prompt_embedding_v2 as _load_prompt_embedding
-
-from functools import partial
 from tqdm import tqdm
 
+import threestudio
+from threestudio.models.prompt_processors.base import (
+    DirectionConfig,
+    PromptProcessorOutput,
+    shift_azimuth_deg,
+    shifted_expotional_decay,
+)
+from threestudio.utils.base import BaseObject
+from threestudio.utils.misc import barrier, cleanup, get_rank
+from threestudio.utils.typing import *
+
+from .utils import _load_image_embedding
+from .utils import _load_prompt_embedding_v2 as _load_prompt_embedding
+from .utils import hash_image, hash_prompt
 
 ##############################################
+
 
 class MultiRefProcessor(BaseObject):
     @dataclass
     class Config(BaseObject.Config):
-
         pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5"
         cache_dir: str = ".threestudio_cache/image_encodings"  # FIXME: hard-coded path
 
@@ -53,26 +50,28 @@ class MultiRefProcessor(BaseObject):
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         return (self.__class__, (self.configure,))
-    
+
     def configure(self) -> None:
         self._cache_dir = self.cfg.cache_dir
 
     @staticmethod
     def func_image(pretrained_model_name_or_path, image_paths, cache_dir, **kwargs):
         raise NotImplementedError
-    
+
     @staticmethod
-    def spawn_func_image(pretrained_model_name_or_path, image_paths, cache_dir, **kwargs):
+    def spawn_func_image(
+        pretrained_model_name_or_path, image_paths, cache_dir, **kwargs
+    ):
         raise NotImplementedError
 
     @staticmethod
     def func_text(pretrained_model_name_or_path, prompts, cache_dir, **kwargs):
         raise NotImplementedError
-    
+
     @staticmethod
     def spawn_func_text(pretrained_model_name_or_path, prompts, cache_dir, **kwargs):
         raise NotImplementedError
-    
+
     def load_model_image(
         self,
     ):
@@ -97,12 +96,7 @@ class MultiRefProcessor(BaseObject):
         """
         pass
 
-    def prepare_text_embeddings(
-        self,
-        all_prompts: List[str],
-        **kwargs
-    ) -> None:
-
+    def prepare_text_embeddings(self, all_prompts: List[str], **kwargs) -> None:
         os.makedirs(self._cache_dir, exist_ok=True)
 
         rank = get_rank(opposite=True)
@@ -114,12 +108,21 @@ class MultiRefProcessor(BaseObject):
 
         # add negative prompt to the list for rank 0
         if rank == 0:
-            if hasattr(self.cfg, "default_prompt") and self.cfg.default_prompt is not None:
+            if (
+                hasattr(self.cfg, "default_prompt")
+                and self.cfg.default_prompt is not None
+            ):
                 all_prompts += [self.cfg.default_prompt]
-            if hasattr(self.cfg, "negative_prompt") and self.cfg.negative_prompt is not None:
+            if (
+                hasattr(self.cfg, "negative_prompt")
+                and self.cfg.negative_prompt is not None
+            ):
                 all_prompts += [self.cfg.negative_prompt]
             # add other prompts, if any
-            if hasattr(self.cfg, "other_prompts") and self.cfg.other_prompts is not None:
+            if (
+                hasattr(self.cfg, "other_prompts")
+                and self.cfg.other_prompts is not None
+            ):
                 try:
                     all_prompts += self.cfg.other_prompts
                 except:
@@ -128,7 +131,6 @@ class MultiRefProcessor(BaseObject):
         prompts_to_process = []
         for prompt in tqdm(all_prompts, desc="Checking existing text embeddings"):
             if self.cfg.use_cache:
-
                 # some text encodings might be already in cache
                 embed_local_pass = True
                 if self.cfg.use_embed_local:
@@ -157,7 +159,6 @@ class MultiRefProcessor(BaseObject):
             prompts_to_process.append(prompt)
 
         if len(prompts_to_process) > 0:
-
             if self.cfg.spawn:
                 self.spawn_func_text(
                     (
@@ -186,13 +187,8 @@ class MultiRefProcessor(BaseObject):
                     del module
                 cleanup()
 
-    #@rank_zero_only, deprecated when each process has its own cache
-    def prepare_image_encodings(
-            self, 
-            all_image_paths: List[str],
-            **kwargs
-        ) -> None:
-
+    # @rank_zero_only, deprecated when each process has its own cache
+    def prepare_image_encodings(self, all_image_paths: List[str], **kwargs) -> None:
         os.makedirs(self._cache_dir, exist_ok=True)
 
         rank = get_rank(opposite=True)
@@ -202,14 +198,14 @@ class MultiRefProcessor(BaseObject):
             all_image_paths = all_image_paths[rank::num_gpus]
 
         image_paths_to_process = []
-        for image_path in tqdm(all_image_paths, desc="Checking existing image embeddings"):
-            
+        for image_path in tqdm(
+            all_image_paths, desc="Checking existing image embeddings"
+        ):
             assert os.path.exists(
                 os.path.join(self.cfg.image_root_dir, image_path)
             ), f"Image path {image_path} does not exist"
 
             if self.cfg.use_cache:
-                
                 # some image encodings are already in cache
                 # do not process them
 
@@ -245,11 +241,10 @@ class MultiRefProcessor(BaseObject):
                         f"Image embeddings for model {self.cfg.pretrained_model_name_or_path} and image [{image_path}] are already in cache, skip processing."
                     )
                     continue
-                
+
             image_paths_to_process.append(image_path)
 
         if len(image_paths_to_process) > 0:
-
             if self.cfg.spawn:
                 self.spawn_func_image(
                     (
@@ -278,12 +273,7 @@ class MultiRefProcessor(BaseObject):
                     del module
                 cleanup()
 
-    def load_text_encoding(
-            self,
-            prompts: List[str],
-            **kwargs
-        ) -> None:
-
+    def load_text_encoding(self, prompts: List[str], **kwargs) -> None:
         if self.cfg.use_embed_global:
             text_embedding_global_list = []
         if self.cfg.use_embed_local:
@@ -291,16 +281,15 @@ class MultiRefProcessor(BaseObject):
 
         # for debugging and single-gpu, single process
         for data in map(
-                partial(
-                    _load_prompt_embedding,
-                    cache_dir=self._cache_dir,
-                    pretrained_model_name_or_path=self.cfg.pretrained_model_name_or_path,
-                    load_embed_global=self.cfg.use_embed_global,
-                    load_embed_local=self.cfg.use_embed_local,
-                ),
-                prompts,
-            ):
-
+            partial(
+                _load_prompt_embedding,
+                cache_dir=self._cache_dir,
+                pretrained_model_name_or_path=self.cfg.pretrained_model_name_or_path,
+                load_embed_global=self.cfg.use_embed_global,
+                load_embed_local=self.cfg.use_embed_local,
+            ),
+            prompts,
+        ):
             if self.cfg.use_embed_global:
                 text_embedding_global_list += [data["global_text_embedding"]]
             if self.cfg.use_embed_local:
@@ -313,7 +302,10 @@ class MultiRefProcessor(BaseObject):
             return_dict["text_embeddings_local"] = text_embedding_local_list
 
         # load negative prompt embedding
-        if hasattr(self.cfg, "negative_prompt") and self.cfg.negative_prompt is not None:
+        if (
+            hasattr(self.cfg, "negative_prompt")
+            and self.cfg.negative_prompt is not None
+        ):
             data = _load_prompt_embedding(
                 self.cfg.negative_prompt,
                 cache_dir=self._cache_dir,
@@ -322,18 +314,17 @@ class MultiRefProcessor(BaseObject):
                 load_embed_local=self.cfg.use_embed_local,
             )
             if self.cfg.use_embed_global:
-                return_dict["uncond_text_embeddings_global"] = data["global_text_embedding"]
+                return_dict["uncond_text_embeddings_global"] = data[
+                    "global_text_embedding"
+                ]
             if self.cfg.use_embed_local:
-                return_dict["uncond_text_embeddings_local"] = data["local_text_embedding"]
+                return_dict["uncond_text_embeddings_local"] = data[
+                    "local_text_embedding"
+                ]
 
         return return_dict
 
-    def load_image_encoding(
-            self, 
-            image_path_batch: List[str],
-            **kwargs
-        ) -> None:
-
+    def load_image_encoding(self, image_path_batch: List[str], **kwargs) -> None:
         if self.cfg.use_latent:
             image_latent_list = []
         if self.cfg.use_embed_global:
@@ -343,18 +334,19 @@ class MultiRefProcessor(BaseObject):
 
         # for debugging and single-gpu, single process
         for data in map(
-                partial(
-                    _load_image_embedding,
-                    cache_dir=self._cache_dir,
-                    pretrained_model_name_or_path=self.cfg.pretrained_model_name_or_path,
-                    load_latent=self.cfg.use_latent,
-                    load_embed_global=self.cfg.use_embed_global,
-                    load_embed_local=self.cfg.use_embed_local,
-                    image_size = self.cfg.image_size if hasattr(self.cfg, "image_size") else 256,
-                ),
-                image_path_batch,
-            ):
-
+            partial(
+                _load_image_embedding,
+                cache_dir=self._cache_dir,
+                pretrained_model_name_or_path=self.cfg.pretrained_model_name_or_path,
+                load_latent=self.cfg.use_latent,
+                load_embed_global=self.cfg.use_embed_global,
+                load_embed_local=self.cfg.use_embed_local,
+                image_size=self.cfg.image_size
+                if hasattr(self.cfg, "image_size")
+                else 256,
+            ),
+            image_path_batch,
+        ):
             if self.cfg.use_latent:
                 image_latent_list += [data["image_latent"]]
             if self.cfg.use_embed_global:
@@ -375,27 +367,27 @@ class MultiRefProcessor(BaseObject):
         self,
         image_paths: Optional[Union[str, List[str]]] = None,
         prompts: Optional[Union[str, List[str]]] = None,
-        **kwargs
+        **kwargs,
     ) -> PromptProcessorOutput:
-        
         if image_paths is not None:
-            assert prompts is None, "Cannot process both image and text at the same time"
+            assert (
+                prompts is None
+            ), "Cannot process both image and text at the same time"
             if isinstance(image_paths, str):
                 image_paths = [image_paths]
-            
-            image_args  = self.load_image_encoding(image_paths, **kwargs)
-            prompt_args = self.load_text_encoding(
-                [self.cfg.default_prompt],
-                **kwargs
-            )
+
+            image_args = self.load_image_encoding(image_paths, **kwargs)
+            prompt_args = self.load_text_encoding([self.cfg.default_prompt], **kwargs)
             return MultiRefProcessorOutput4Image(
                 device=self.device,
                 **image_args,
                 **prompt_args,
             )
-        
+
         if prompts is not None:
-            assert image_paths is None, "Cannot process both image and text at the same time"
+            assert (
+                image_paths is None
+            ), "Cannot process both image and text at the same time"
             if isinstance(prompts, str):
                 prompts = [prompts]
 
@@ -403,7 +395,9 @@ class MultiRefProcessor(BaseObject):
 
             # update other arguments
             if hasattr(self.cfg, "use_local_text_embeddings"):
-                prompt_args["use_local_text_embeddings"] = self.cfg.use_local_text_embeddings
+                prompt_args[
+                    "use_local_text_embeddings"
+                ] = self.cfg.use_local_text_embeddings
 
             return MultiRefProcessorOutput4Text(
                 device=self.device,
@@ -411,13 +405,14 @@ class MultiRefProcessor(BaseObject):
                 **prompt_args,
             )
 
+
 @dataclass
 class MultiRefProcessorOutput4Text:
     text_embeddings_global: Optional[List[Float[Tensor, "B ..."]]] = None
     text_embeddings_local: Optional[List[Float[Tensor, "B ..."]]] = None
     uncond_text_embeddings_global: Optional[Float[Tensor, "B ..."]] = None
     uncond_text_embeddings_local: Optional[Float[Tensor, "B ..."]] = None
-    
+
     # must have the following attributes
     use_local_text_embeddings: bool = False
     device: str = "cuda"
@@ -439,28 +434,26 @@ class MultiRefProcessorOutput4Text:
         if isinstance(self.uncond_text_embeddings_local, List):
             uncond_text_embeddings_local = self.uncond_text_embeddings_local[0]
 
-        return uncond_text_embeddings_local[None, :, :].repeat(
-                batch_size, 1, 1
-            ).to(self.device)
-        
-    def get_text_embeddings(
-        self,
-        **kwargs
-    ):
-        if "view_dependent_prompting" in kwargs and kwargs["view_dependent_prompting"]:
-            raise NotImplementedError("View-dependent prompting is not supported for text embeddings")
+        return (
+            uncond_text_embeddings_local[None, :, :]
+            .repeat(batch_size, 1, 1)
+            .to(self.device)
+        )
 
-        text_embeddings = torch.stack(
-            self.text_embeddings_local,
-            dim=0
-        ).to(self.device)
+    def get_text_embeddings(self, **kwargs):
+        if "view_dependent_prompting" in kwargs and kwargs["view_dependent_prompting"]:
+            raise NotImplementedError(
+                "View-dependent prompting is not supported for text embeddings"
+            )
+
+        text_embeddings = torch.stack(self.text_embeddings_local, dim=0).to(self.device)
         uncond_text_embeddings = self.get_uncond_text_embeddings()
         return torch.cat(
             [
                 text_embeddings,
                 uncond_text_embeddings,
             ],
-            dim=0
+            dim=0,
         )
 
     def get_global_text_embeddings(
@@ -471,24 +464,17 @@ class MultiRefProcessorOutput4Text:
             use_local_text_embeddings = self.use_local_text_embeddings
 
         if use_local_text_embeddings:
-            return torch.stack(
-                self.text_embeddings_local, 
-                dim=0
-            ).to(self.device)
+            return torch.stack(self.text_embeddings_local, dim=0).to(self.device)
         else:
-            return torch.stack(
-                self.text_embeddings_global, 
-                dim=0
-            ).to(self.device)
+            return torch.stack(self.text_embeddings_global, dim=0).to(self.device)
 
-    
 
 @dataclass
 class MultiRefProcessorOutput4Image:
     image_latents: Optional[List[Float[Tensor, "B ..."]]] = None
     image_embeddings_global: Optional[List[Float[Tensor, "B ..."]]] = None
     image_embeddings_local: Optional[List[Float[Tensor, "B ..."]]] = None
-    
+
     text_embeddings_global: Optional[List[Float[Tensor, "B ..."]]] = None
     text_embeddings_local: Optional[List[Float[Tensor, "B ..."]]] = None
 
@@ -509,55 +495,40 @@ class MultiRefProcessorOutput4Image:
         return_dict = {}
         if self.image_latents is not None:
             return_dict["image_latents"] = torch.zeros_like(
-                torch.stack(  
-                    self.image_latents, 
-                    dim=0
-                )
+                torch.stack(self.image_latents, dim=0)
             ).to(self.device)
         if self.image_embeddings_global is not None:
             return_dict["image_embeddings_global"] = torch.zeros_like(
-                torch.stack(
-                    self.image_embeddings_global, 
-                    dim=0
-                )
+                torch.stack(self.image_embeddings_global, dim=0)
             ).to(self.device)
         if self.image_embeddings_local is not None:
             return_dict["image_embeddings_local"] = torch.zeros_like(
-                torch.stack(
-                    self.image_embeddings_local, 
-                    dim=0
-                )
+                torch.stack(self.image_embeddings_local, dim=0)
             ).to(self.device)
         return return_dict
-
 
     def get_image_encodings(
         self,
     ):
         return_dict = {}
         if self.image_latents is not None:
-            return_dict["image_latents"] = torch.stack(
-                self.image_latents, 
-                dim=0
-            ).to(self.device)
+            return_dict["image_latents"] = torch.stack(self.image_latents, dim=0).to(
+                self.device
+            )
         if self.image_embeddings_global is not None:
             return_dict["image_embeddings_global"] = torch.stack(
-                self.image_embeddings_global, 
-                dim=0
+                self.image_embeddings_global, dim=0
             ).to(self.device)
         if self.image_embeddings_local is not None:
             return_dict["image_embeddings_local"] = torch.stack(
-                self.image_embeddings_local, 
-                dim=0
+                self.image_embeddings_local, dim=0
             ).to(self.device)
         if self.text_embeddings_global is not None:
             return_dict["text_embeddings_global"] = torch.stack(
-                self.text_embeddings_global, 
-                dim=0
+                self.text_embeddings_global, dim=0
             ).to(self.device)
         if self.text_embeddings_local is not None:
             return_dict["text_embeddings_local"] = torch.stack(
-                self.text_embeddings_local, 
-                dim=0
+                self.text_embeddings_local, dim=0
             ).to(self.device)
         return return_dict

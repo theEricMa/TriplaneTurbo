@@ -1,28 +1,18 @@
 import os
 import shutil
 from dataclasses import dataclass, field
+from functools import partial
 
 import torch
+from diffusers import DDIMScheduler, DDPMScheduler, DPMSolverMultistepScheduler
+from tqdm import tqdm
 
 import threestudio
+from threestudio.models.mesh import Mesh
 from threestudio.systems.base import BaseLift3DSystem
-from threestudio.utils.misc import cleanup, get_rank, get_device
+from threestudio.utils.misc import barrier, cleanup, get_device, get_rank
 from threestudio.utils.ops import binary_cross_entropy, dot
 from threestudio.utils.typing import *
-
-from functools import partial
-
-from tqdm import tqdm
-from threestudio.utils.misc import barrier
-from threestudio.models.mesh import Mesh
-
-from diffusers import (
-    DDPMScheduler,
-    DPMSolverMultistepScheduler,
-    DDIMScheduler,
-)
-
-from functools import partial
 
 
 def sample_timesteps(
@@ -35,20 +25,18 @@ def sample_timesteps(
 
     for i in range(num_parts):
         length_timestep = len(all_timesteps) // num_parts
-        timestep = all_timesteps[
-            i * length_timestep : (i + 1) * length_timestep
-        ]
+        timestep = all_timesteps[i * length_timestep : (i + 1) * length_timestep]
         # sample only one from the timestep
         idx = torch.randint(0, len(timestep), (batch_size,))
         timesteps.append(timestep[idx])
 
     return timesteps
 
+
 @threestudio.register("multiprompt-dual-renderer-multistep-generator-system")
 class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
-
         # validation related
         visualize_samples: bool = False
 
@@ -72,7 +60,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         scheduler_dir: str = "pretrained/stable-diffusion-2-1-base"
 
         # the followings are related to the multi-step diffusion
-        noise_addition: str = "gaussian" # any of "gaussian", "zero", "pred"
+        noise_addition: str = "gaussian"  # any of "gaussian", "zero", "pred"
         num_parts_training: int = 4
 
         num_steps_training: int = 50
@@ -80,13 +68,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         timesteps_from_T: bool = True
 
-        
-        sample_scheduler: str = "ddpm" #any of "ddpm", "ddim"
+        sample_scheduler: str = "ddpm"  # any of "ddpm", "ddim"
         noise_scheduler: str = "ddim"
 
-        specifiy_guidance_timestep: Optional[str] = None # any of None, v1;  control the guidance timestep
+        specifiy_guidance_timestep: Optional[
+            str
+        ] = None  # any of None, v1;  control the guidance timestep
 
-        predition_type: str = "epsilon" # any of "epsilon", "sample"
+        predition_type: str = "epsilon"  # any of "epsilon", "sample"
 
         gradient_accumulation_steps: int = 1
 
@@ -104,7 +93,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             background=self.background,
         )
 
-        if self.cfg.train_guidance: # if the guidance requires training, then it is initialized here
+        if (
+            self.cfg.train_guidance
+        ):  # if the guidance requires training, then it is initialized here
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
         # Sampler for training
@@ -115,19 +106,22 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         self.sample_scheduler = self._configure_scheduler(self.cfg.sample_scheduler)
 
         # This property activates manual optimization.
-        self.automatic_optimization = False 
-
+        self.automatic_optimization = False
 
     def _configure_scheduler(self, scheduler: str):
         assert scheduler in ["ddpm", "ddim", "dpm"]
         assert self.cfg.predition_type in [
-            "epsilon", "sample", "v_prediction",
-            "sample_delta", "sample_delta_v2", "sample_delta_v3"
+            "epsilon",
+            "sample",
+            "v_prediction",
+            "sample_delta",
+            "sample_delta_v2",
+            "sample_delta_v3",
         ]
-        
+
         # define the prediction type
         predition_type = self.cfg.predition_type
-        if "sample" in predition_type: # special case for variance such as sample_delta
+        if "sample" in predition_type:  # special case for variance such as sample_delta
             predition_type = "sample"
 
         if scheduler == "ddpm":
@@ -150,27 +144,28 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             )
         return scheduler_returned
 
-
     def on_fit_start(self) -> None:
         super().on_fit_start()
         # only used in training
 
-        if not self.cfg.train_guidance: # if the guidance does not require training, then it is initialized here
+        if (
+            not self.cfg.train_guidance
+        ):  # if the guidance does not require training, then it is initialized here
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
         # initialize SDF
         if self.cfg.initialize_shape:
             # info
-            if get_device() == "cuda_0": # only report from one process
+            if get_device() == "cuda_0":  # only report from one process
                 threestudio.info("Initializing shape...")
-            
+
             # check if attribute exists
             if not hasattr(self.geometry, "initialize_shape"):
-                threestudio.info("Geometry does not have initialize_shape method. skip.")
+                threestudio.info(
+                    "Geometry does not have initialize_shape method. skip."
+                )
             else:
                 self.geometry.initialize_shape()
-
-
 
     def on_train_epoch_start(self) -> None:
         super().on_train_epoch_start()
@@ -191,17 +186,19 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         except:
             pass
 
-
     def forward_rendering(
         self,
         batch: Dict[str, Any],
     ):
-
-        render_out = self.renderer(**batch, )
-        render_out_2nd = self.renderer_2nd(**batch, )
+        render_out = self.renderer(
+            **batch,
+        )
+        render_out_2nd = self.renderer_2nd(
+            **batch,
+        )
 
         # decode the rgb as latents only in testing and validation
-        if self.cfg.rgb_as_latents and not self.training: 
+        if self.cfg.rgb_as_latents and not self.training:
             # get the rgb
             if "comp_rgb" not in render_out:
                 raise ValueError(
@@ -211,21 +208,21 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 out_image = render_out["comp_rgb"]
                 out_image = self.guidance.decode_latents(
                     out_image.permute(0, 3, 1, 2)
-                ).permute(0, 2, 3, 1) 
-                render_out['decoded_rgb'] = out_image
+                ).permute(0, 2, 3, 1)
+                render_out["decoded_rgb"] = out_image
 
                 out_image_2nd = render_out_2nd["comp_rgb"]
                 out_image_2nd = self.guidance.decode_latents(
                     out_image_2nd.permute(0, 3, 1, 2)
                 ).permute(0, 2, 3, 1)
-                render_out_2nd['decoded_rgb'] = out_image_2nd
+                render_out_2nd["decoded_rgb"] = out_image_2nd
 
         return {
             **render_out,
         }, {
             **render_out_2nd,
         }
-        
+
     def compute_guidance_n_loss(
         self,
         out: Dict[str, Any],
@@ -241,13 +238,16 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             timestep_range = None
         elif self.cfg.specifiy_guidance_timestep in ["v1"]:
             timestep_range = [
-                (self.cfg.num_parts_training - idx - 1) / self.cfg.num_parts_training, # min
-                (self.cfg.num_parts_training - idx) / self.cfg.num_parts_training # max
+                (self.cfg.num_parts_training - idx - 1)
+                / self.cfg.num_parts_training,  # min
+                (self.cfg.num_parts_training - idx)
+                / self.cfg.num_parts_training,  # max
             ]
         elif self.cfg.specifiy_guidance_timestep in ["v2"]:
             timestep_range = [
-                0, # min
-                (self.cfg.num_parts_training - idx) / self.cfg.num_parts_training # max
+                0,  # min
+                (self.cfg.num_parts_training - idx)
+                / self.cfg.num_parts_training,  # max
             ]
         else:
             raise NotImplementedError
@@ -262,19 +262,23 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         if not self.cfg.parallel_guidance:
             # the guidance is computed in two steps
             guidance_out = self.guidance(
-                guidance_rgb, 
-                normal=out["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out else None,
+                guidance_rgb,
+                normal=out["comp_normal_cam_vis"]
+                if "comp_normal_cam_vis" in out
+                else None,
                 depth=out["disparity"] if "disparity" in out else None,
-                **batch, 
+                **batch,
                 rgb_as_latents=self.cfg.rgb_as_latents,
                 timestep_range=timestep_range,
             )
 
             guidance_out_2nd = self.guidance(
-                guidance_rgb_2nd, 
-                normal=out_2nd["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out_2nd else None,
+                guidance_rgb_2nd,
+                normal=out_2nd["comp_normal_cam_vis"]
+                if "comp_normal_cam_vis" in out_2nd
+                else None,
                 depth=out_2nd["disparity"] if "disparity" in out_2nd else None,
-                **batch, 
+                **batch,
                 rgb_as_latents=self.cfg.rgb_as_latents,
                 timestep_range=timestep_range,
             )
@@ -282,21 +286,41 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             # the guidance is computed in parallel
             guidance_out, guidance_out_2nd = self.guidance(
                 guidance_rgb,
-                normal=out["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out else None,
+                normal=out["comp_normal_cam_vis"]
+                if "comp_normal_cam_vis" in out
+                else None,
                 depth=out["disparity"] if "disparity" in out else None,
                 **batch,
                 rgb_as_latents=self.cfg.rgb_as_latents,
-                rgb_2nd = guidance_rgb_2nd,
-                normal_2nd = out_2nd["comp_normal_cam_vis"] if "comp_normal_cam_vis" in out_2nd else None,
-                depth_2nd = out_2nd["disparity"] if "disparity" in out_2nd else None,
+                rgb_2nd=guidance_rgb_2nd,
+                normal_2nd=out_2nd["comp_normal_cam_vis"]
+                if "comp_normal_cam_vis" in out_2nd
+                else None,
+                depth_2nd=out_2nd["disparity"] if "disparity" in out_2nd else None,
                 timestep_range=timestep_range,
             )
-        loss_dict = self._compute_loss(guidance_out, out, renderer="1st", step = idx, has_grad = guidance_rgb.requires_grad, **batch)
-        loss_dict_2nd = self._compute_loss(guidance_out_2nd, out_2nd, renderer="2nd", step = idx, has_grad = guidance_rgb_2nd.requires_grad, **batch)
+        loss_dict = self._compute_loss(
+            guidance_out,
+            out,
+            renderer="1st",
+            step=idx,
+            has_grad=guidance_rgb.requires_grad,
+            **batch,
+        )
+        loss_dict_2nd = self._compute_loss(
+            guidance_out_2nd,
+            out_2nd,
+            renderer="2nd",
+            step=idx,
+            has_grad=guidance_rgb_2nd.requires_grad,
+            **batch,
+        )
 
         return {
-            "fidelity_loss": loss_dict["fidelity_loss"] + loss_dict_2nd["fidelity_loss"],
-            "regularization_loss": loss_dict["regularization_loss"] + loss_dict_2nd["regularization_loss"],            
+            "fidelity_loss": loss_dict["fidelity_loss"]
+            + loss_dict_2nd["fidelity_loss"],
+            "regularization_loss": loss_dict["regularization_loss"]
+            + loss_dict_2nd["regularization_loss"],
         }
 
     def _set_timesteps(
@@ -307,27 +331,30 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         scheduler.set_timesteps(num_steps)
         timesteps_orig = scheduler.timesteps
         if self.cfg.timesteps_from_T:
-            timesteps_delta = scheduler.config.num_train_timesteps - 1 - timesteps_orig.max() 
+            timesteps_delta = (
+                scheduler.config.num_train_timesteps - 1 - timesteps_orig.max()
+            )
             timesteps = timesteps_orig + timesteps_delta
             return timesteps
         else:
             return timesteps_orig
 
-
     def diffusion_reverse(
         self,
         batch: Dict[str, Any],
     ):
-
-
-        prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
+        prompt_utils = (
+            batch["condition_utils"]
+            if "condition_utils" in batch
+            else batch["prompt_utils"]
+        )
         if "prompt_target" in batch:
-           raise NotImplementedError
+            raise NotImplementedError
         else:
             # more general case
             text_embed_cond = prompt_utils.get_global_text_embeddings()
             text_embed_uncond = prompt_utils.get_uncond_text_embeddings()
-        
+
         if None:
             text_embed = torch.cat(
                 [
@@ -347,12 +374,8 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         latents = batch.pop("noise")
 
         for i, t in enumerate(timesteps):
-
             # prepare inputs
-            noisy_latent_input = self.sample_scheduler.scale_model_input(
-                latents, 
-                t
-            )
+            noisy_latent_input = self.sample_scheduler.scale_model_input(latents, t)
 
             if None:
                 noisy_latent_input = torch.cat([noisy_latent_input] * 2, dim=0)
@@ -361,9 +384,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             if self.cfg.predition_type in ["epsilon", "v_prediction"]:
                 # predict the noise added
                 pred = self.geometry.denoise(
-                    noisy_input = noisy_latent_input,
-                    text_embed = text_embed, # TODO: text_embed might be null
-                    timestep = t.to(self.device),
+                    noisy_input=noisy_latent_input,
+                    text_embed=text_embed,  # TODO: text_embed might be null
+                    timestep=t.to(self.device),
                 )
                 results = self.sample_scheduler.step(pred, t, latents)
                 latents = results.prev_sample
@@ -373,19 +396,15 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         # decode the latent to 3D representation
         space_cache = self.geometry.decode(
-            latents = latents_denoised,
+            latents=latents_denoised,
         )
 
         return space_cache
 
-    def training_step(
-        self,
-        batch_list: List[Dict[str, Any]],
-        batch_idx
-    ):
+    def training_step(self, batch_list: List[Dict[str, Any]], batch_idx):
         """
-            Diffusion Forward Process
-            but supervised by the 2D guidance
+        Diffusion Forward Process
+        but supervised by the 2D guidance
         """
         latent = batch_list[0]["noise"]
         # batch_size = batch_list[0]["prompt_utils"].get_global_text_embeddings().shape[0] # sort of hacky
@@ -397,27 +416,34 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
         timesteps = sample_timesteps(
             all_timesteps,
-            num_parts = self.cfg.num_parts_training, 
-            batch_size=1, #batch_size,
+            num_parts=self.cfg.num_parts_training,
+            batch_size=1,  # batch_size,
         )
 
         # zero the gradients
         opt = self.optimizers()
 
         # load the coefficients to the GPU
-        self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(self.device)
-    
-        for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
+        self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(
+            self.device
+        )
 
+        for i, (t, batch) in enumerate(zip(timesteps, batch_list)):
             # prepare the text embeddings as input
-            prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
+            prompt_utils = (
+                batch["condition_utils"]
+                if "condition_utils" in batch
+                else batch["prompt_utils"]
+            )
             if "prompt_target" in batch:
                 raise NotImplementedError
             else:
                 # more general case
                 cond = prompt_utils.get_global_text_embeddings()
                 uncond = prompt_utils.get_uncond_text_embeddings()
-                batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
+                batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(
+                    use_local_text_embeddings=False
+                )
                 batch["text_embed"] = cond
 
             # choose the noise to be added
@@ -425,7 +451,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 noise = torch.randn_like(latent)
             elif self.cfg.noise_addition == "zero":
                 noise = torch.zeros_like(latent)
-            elif self.cfg.noise_addition == "pred": # use the network to predict the noise
+            elif (
+                self.cfg.noise_addition == "pred"
+            ):  # use the network to predict the noise
                 noise = noise_pred.detach() if i > 0 else torch.randn_like(latent)
 
             # add noise to the latent
@@ -434,20 +462,21 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 noise,
                 t,
             )
- 
 
             # prepare the text embeddings as input
             text_embed = cond
-            # if torch.rand(1) < 0: 
+            # if torch.rand(1) < 0:
             #     text_embed = uncond
 
             noise_pred = self.geometry.denoise(
-                noisy_input = noisy_latent,
-                text_embed = text_embed, # TODO: text_embed might be null
-                timestep = t.to(self.device),
+                noisy_input=noisy_latent,
+                text_embed=text_embed,  # TODO: text_embed might be null
+                timestep=t.to(self.device),
             )
 
-            denoised_latents = self.noise_scheduler.step(noise_pred, t.to(self.device), noisy_latent).pred_original_sample
+            denoised_latents = self.noise_scheduler.step(
+                noise_pred, t.to(self.device), noisy_latent
+            ).pred_original_sample
 
             # # necessary coefficients
             # alphas: Float[Tensor, "..."] = self.noise_scheduler.alphas_cumprod.to(
@@ -455,7 +484,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             # )
             # alpha = (alphas[t] ** 0.5).view(-1, 1, 1, 1).to(self.device)
             # sigma = ((1 - alphas[t]) ** 0.5).view(-1, 1, 1, 1).to(self.device)
-
 
             # # predict the noise added
             # if self.cfg.predition_type in ["epsilon"]:
@@ -493,41 +521,39 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
             # decode the latent to 3D representation
             batch["space_cache"] = self.geometry.decode(
-                latents = denoised_latents,
+                latents=denoised_latents,
             )
 
             # render the image and compute the gradients
             out, out_2nd = self.forward_rendering(batch)
-            loss_dict = self.compute_guidance_n_loss(
-                out, out_2nd, idx = i, **batch
-            )
+            loss_dict = self.compute_guidance_n_loss(out, out_2nd, idx=i, **batch)
             fidelity_loss = loss_dict["fidelity_loss"]
             regularization_loss = loss_dict["regularization_loss"]
 
             if hasattr(self.cfg.loss, "weighting_strategy"):
-            #     if self.cfg.loss.weighting_strategy in ["v1"]:
-            #         weight_fide = 1.0 / self.cfg.num_parts_training
-            #         weight_regu = 1.0 / self.cfg.num_parts_training
-            #     elif self.cfg.loss.weighting_strategy in ["v2"]:
-            #         weight_fide = (alpha / sigma).mean() # mean is for converting the batch to a scalar
-            #         weight_regu = (alpha / sigma).mean() 
-            #     elif self.cfg.loss.weighting_strategy in ["v2-2"]:
-            #         weight_fide = 1.0 / self.cfg.num_parts_training
-            #         weight_regu = (alpha / sigma).mean()
-            #     elif self.cfg.loss.weighting_strategy in ["v3"]:
-            #         # follow SDS
-            #         weight_fide = (sigma**2).mean()
-            #         weight_regu = (sigma**2).mean() 
-            #     elif self.cfg.loss.weighting_strategy in ["v3-2"]:
-            #         weight_fide = 1.0 / self.cfg.num_parts_training
-            #         # follow SDS
-            #         weight_regu = (sigma**2).mean()
-            #     elif self.cfg.loss.weighting_strategy in ["v4"]:
-            #         weight_fide = (sigma / alpha).mean()
-            #         weight_regu = (sigma / alpha).mean()
-            #     else:
-            #         raise NotImplementedError
-            # else:
+                #     if self.cfg.loss.weighting_strategy in ["v1"]:
+                #         weight_fide = 1.0 / self.cfg.num_parts_training
+                #         weight_regu = 1.0 / self.cfg.num_parts_training
+                #     elif self.cfg.loss.weighting_strategy in ["v2"]:
+                #         weight_fide = (alpha / sigma).mean() # mean is for converting the batch to a scalar
+                #         weight_regu = (alpha / sigma).mean()
+                #     elif self.cfg.loss.weighting_strategy in ["v2-2"]:
+                #         weight_fide = 1.0 / self.cfg.num_parts_training
+                #         weight_regu = (alpha / sigma).mean()
+                #     elif self.cfg.loss.weighting_strategy in ["v3"]:
+                #         # follow SDS
+                #         weight_fide = (sigma**2).mean()
+                #         weight_regu = (sigma**2).mean()
+                #     elif self.cfg.loss.weighting_strategy in ["v3-2"]:
+                #         weight_fide = 1.0 / self.cfg.num_parts_training
+                #         # follow SDS
+                #         weight_regu = (sigma**2).mean()
+                #     elif self.cfg.loss.weighting_strategy in ["v4"]:
+                #         weight_fide = (sigma / alpha).mean()
+                #         weight_regu = (sigma / alpha).mean()
+                #     else:
+                #         raise NotImplementedError
+                # else:
                 weight_fide = 1.0 / self.cfg.num_parts_training
                 weight_regu = 1.0 / self.cfg.num_parts_training
 
@@ -537,59 +563,70 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
 
             # prepare for the next iteration
             latent = denoised_latents.detach()
-            
+
         # update the weights
         if (batch_idx + 1) % self.cfg.gradient_accumulation_steps == 0:
             opt.step()
             opt.zero_grad()
 
     def validation_step(self, batch, batch_idx):
-
         # prepare the text embeddings as input
-        prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
+        prompt_utils = (
+            batch["condition_utils"]
+            if "condition_utils" in batch
+            else batch["prompt_utils"]
+        )
         if "prompt_target" in batch:
             raise NotImplementedError
         else:
             # more general case
             batch["text_embed"] = prompt_utils.get_global_text_embeddings()
-            batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
-    
-        batch["space_cache"]  = self.diffusion_reverse(batch)
+            batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(
+                use_local_text_embeddings=False
+            )
+
+        batch["space_cache"] = self.diffusion_reverse(batch)
         out, out_2nd = self.forward_rendering(batch)
 
-        batch_size = out['comp_rgb'].shape[0]
+        batch_size = out["comp_rgb"].shape[0]
 
         for batch_idx in tqdm(range(batch_size), desc="Saving val images"):
             self._save_image_grid(batch, batch_idx, out, phase="val", render="1st")
             self._save_image_grid(batch, batch_idx, out_2nd, phase="val", render="2nd")
-                
+
         if self.cfg.visualize_samples:
             raise NotImplementedError
 
-    def test_step(self, batch, batch_idx, return_space_cache = False, render_images = True):
-
+    def test_step(self, batch, batch_idx, return_space_cache=False, render_images=True):
         # prepare the text embeddings as input
-        prompt_utils = batch["condition_utils"] if "condition_utils" in batch else batch["prompt_utils"]
+        prompt_utils = (
+            batch["condition_utils"]
+            if "condition_utils" in batch
+            else batch["prompt_utils"]
+        )
         if "prompt_target" in batch:
             raise NotImplementedError
         else:
             # more general case
             batch["text_embed"] = prompt_utils.get_global_text_embeddings()
-            batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(use_local_text_embeddings = False)
-    
+            batch["text_embed_bg"] = prompt_utils.get_global_text_embeddings(
+                use_local_text_embeddings=False
+            )
+
             batch["space_cache"] = self.diffusion_reverse(batch)
 
         if render_images:
             out, out_2nd = self.forward_rendering(batch)
-            batch_size = out['comp_rgb'].shape[0]
+            batch_size = out["comp_rgb"].shape[0]
 
             for batch_idx in tqdm(range(batch_size), desc="Saving test images"):
                 self._save_image_grid(batch, batch_idx, out, phase="test", render="1st")
-                self._save_image_grid(batch, batch_idx, out_2nd, phase="test", render="2nd")
+                self._save_image_grid(
+                    batch, batch_idx, out_2nd, phase="test", render="2nd"
+                )
 
         if return_space_cache:
             return batch["space_cache"]
-
 
     def _compute_loss(
         self,
@@ -600,7 +637,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         has_grad: bool = True,
         **batch,
     ):
-        
         assert renderer in ["1st", "2nd"]
 
         fide_loss = 0.0
@@ -609,13 +645,19 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             if renderer == "1st":
                 self.log(f"train/{name}_{step}", value)
                 if name.startswith("loss_"):
-                    fide_loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+                    fide_loss += value * self.C(
+                        self.cfg.loss[name.replace("loss_", "lambda_")]
+                    )
             else:
                 self.log(f"train/{name}_2nd_{step}", value)
                 if name.startswith("loss_"):
-                    fide_loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_") + "_2nd"])
+                    fide_loss += value * self.C(
+                        self.cfg.loss[name.replace("loss_", "lambda_") + "_2nd"]
+                    )
 
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_orient) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_orient_2nd) > 0):
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_orient) > 0) or (
+            renderer == "2nd" and self.C(self.cfg.loss.lambda_orient_2nd) > 0
+        ):
             if "normal" not in out:
                 raise ValueError(
                     "Normal is required for orientation loss, no normal is found in the output."
@@ -631,17 +673,28 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 self.log(f"train/loss_orient_2nd_{step}", loss_orient)
                 regu_loss += loss_orient * self.C(self.cfg.loss.lambda_orient_2nd)
 
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_sparsity) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_sparsity_2nd) > 0):
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_sparsity) > 0) or (
+            renderer == "2nd" and self.C(self.cfg.loss.lambda_sparsity_2nd) > 0
+        ):
             loss_sparsity = (out["opacity"] ** 2 + 0.01).sqrt().mean()
             if renderer == "1st":
-                self.log(f"train/loss_sparsity_{step}", loss_sparsity, prog_bar=False if step % 4 != 3 else True)
+                self.log(
+                    f"train/loss_sparsity_{step}",
+                    loss_sparsity,
+                    prog_bar=False if step % 4 != 3 else True,
+                )
                 regu_loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity)
             else:
-                self.log(f"train/loss_sparsity_2nd_{step}", loss_sparsity, prog_bar=False if step % 4 != 3 else True)
+                self.log(
+                    f"train/loss_sparsity_2nd_{step}",
+                    loss_sparsity,
+                    prog_bar=False if step % 4 != 3 else True,
+                )
                 regu_loss += loss_sparsity * self.C(self.cfg.loss.lambda_sparsity_2nd)
 
-
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_opaque) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_opaque_2nd) > 0):
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_opaque) > 0) or (
+            renderer == "2nd" and self.C(self.cfg.loss.lambda_opaque_2nd) > 0
+        ):
             opacity_clamped = out["opacity"].clamp(1.0e-3, 1.0 - 1.0e-3)
             loss_opaque = binary_cross_entropy(opacity_clamped, opacity_clamped)
             if renderer == "1st":
@@ -651,10 +704,12 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 self.log(f"train/loss_opaque_2nd_{step}", loss_opaque)
                 regu_loss += loss_opaque * self.C(self.cfg.loss.lambda_opaque_2nd)
 
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_z_variance) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_z_variance_2nd) > 0):
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_z_variance) > 0) or (
+            renderer == "2nd" and self.C(self.cfg.loss.lambda_z_variance_2nd) > 0
+        ):
             # z variance loss proposed in HiFA: http://arxiv.org/abs/2305.18766
             # helps reduce floaters and produce solid geometry
-            if 'z_variance' not in out:
+            if "z_variance" not in out:
                 raise ValueError(
                     "z_variance is required for z_variance loss, no z_variance is found in the output."
                 )
@@ -664,10 +719,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 regu_loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance)
             else:
                 self.log(f"train/loss_z_variance_2nd_{step}", loss_z_variance)
-                regu_loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance_2nd)
+                regu_loss += loss_z_variance * self.C(
+                    self.cfg.loss.lambda_z_variance_2nd
+                )
 
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_sdf_abs) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_sdf_abs_2nd) > 0):
-            if 'sdf' not in out:
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_sdf_abs) > 0) or (
+            renderer == "2nd" and self.C(self.cfg.loss.lambda_sdf_abs_2nd) > 0
+        ):
+            if "sdf" not in out:
                 raise ValueError(
                     "sdf is required for sdf_abs loss, no sdf is found in the output."
                 )
@@ -687,12 +746,14 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 regu_loss += loss_sdf_abs * self.C(self.cfg.loss.lambda_sdf_abs_2nd)
 
         # sdf eikonal loss
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_eikonal) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_eikonal_2nd) > 0):
-            if 'sdf_grad' not in out:
+        if (renderer == "1st" and self.C(self.cfg.loss.lambda_eikonal) > 0) or (
+            renderer == "2nd" and self.C(self.cfg.loss.lambda_eikonal_2nd) > 0
+        ):
+            if "sdf_grad" not in out:
                 raise ValueError(
                     "sdf is required for eikonal loss, no sdf is found in the output."
                 )
-            
+
             if isinstance(out["sdf_grad"], torch.Tensor):
                 loss_eikonal = (
                     (torch.linalg.norm(out["sdf_grad"], ord=2, dim=-1) - 1.0) ** 2
@@ -705,7 +766,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                     ).mean()
                 loss_eikonal /= len(out["sdf_grad"])
 
-            
             if renderer == "1st":
                 self.log(f"train/loss_eikonal_{step}", loss_eikonal)
                 regu_loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal)
@@ -714,8 +774,13 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 regu_loss += loss_eikonal * self.C(self.cfg.loss.lambda_eikonal_2nd)
 
         # normal consistency loss
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_normal_consistency) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_normal_consistency_2nd) > 0):
-            if 'mesh' in out:
+        if (
+            renderer == "1st" and self.C(self.cfg.loss.lambda_normal_consistency) > 0
+        ) or (
+            renderer == "2nd"
+            and self.C(self.cfg.loss.lambda_normal_consistency_2nd) > 0
+        ):
+            if "mesh" in out:
                 if not isinstance(out["mesh"], list):
                     out["mesh"] = [out["mesh"]]
                 loss_normal_consistency = 0.0
@@ -728,15 +793,28 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 )
 
             if renderer == "1st":
-                self.log(f"train/loss_normal_consistency_{step}", loss_normal_consistency)
-                regu_loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency)
+                self.log(
+                    f"train/loss_normal_consistency_{step}", loss_normal_consistency
+                )
+                regu_loss += loss_normal_consistency * self.C(
+                    self.cfg.loss.lambda_normal_consistency
+                )
             else:
-                self.log(f"train/loss_normal_consistency_2nd_{step}", loss_normal_consistency)
-                regu_loss += loss_normal_consistency * self.C(self.cfg.loss.lambda_normal_consistency_2nd)
-        
+                self.log(
+                    f"train/loss_normal_consistency_2nd_{step}", loss_normal_consistency
+                )
+                regu_loss += loss_normal_consistency * self.C(
+                    self.cfg.loss.lambda_normal_consistency_2nd
+                )
+
         # laplacian loss
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_laplacian_smoothness) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd) > 0):
-            if 'mesh' in out:
+        if (
+            renderer == "1st" and self.C(self.cfg.loss.lambda_laplacian_smoothness) > 0
+        ) or (
+            renderer == "2nd"
+            and self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd) > 0
+        ):
+            if "mesh" in out:
                 if not isinstance(out["mesh"], list):
                     out["mesh"] = [out["mesh"]]
                 loss_laplacian = 0.0
@@ -748,27 +826,46 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 raise ValueError(
                     "mesh is required for laplacian loss, no mesh is found in the output."
                 )
-            
+
             if renderer == "1st":
                 self.log(f"train/loss_laplacian_smoothness_{step}", loss_laplacian)
-                regu_loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness)
+                regu_loss += loss_laplacian * self.C(
+                    self.cfg.loss.lambda_laplacian_smoothness
+                )
             else:
                 self.log(f"train/loss_laplacian_smoothness_2nd_{step}", loss_laplacian)
-                regu_loss += loss_laplacian * self.C(self.cfg.loss.lambda_laplacian_smoothness_2nd)
-            
+                regu_loss += loss_laplacian * self.C(
+                    self.cfg.loss.lambda_laplacian_smoothness_2nd
+                )
+
         # lambda_normal_smoothness_2d
-        if (renderer == "1st" and self.C(self.cfg.loss.lambda_normal_smoothness_2d) > 0) or (renderer == "2nd" and self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd) > 0):
+        if (
+            renderer == "1st" and self.C(self.cfg.loss.lambda_normal_smoothness_2d) > 0
+        ) or (
+            renderer == "2nd"
+            and self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd) > 0
+        ):
             normal = out["comp_normal"]
             loss_normal_smoothness_2d = (
-                (normal[:, 1:, :, :] - normal[:, :-1, :, :]).square().mean() +
-                (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean()
-            )
+                normal[:, 1:, :, :] - normal[:, :-1, :, :]
+            ).square().mean() + (
+                normal[:, :, 1:, :] - normal[:, :, :-1, :]
+            ).square().mean()
             if renderer == "1st":
-                self.log(f"train/loss_normal_smoothness_2d_{step}", loss_normal_smoothness_2d)
-                regu_loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d)
+                self.log(
+                    f"train/loss_normal_smoothness_2d_{step}", loss_normal_smoothness_2d
+                )
+                regu_loss += loss_normal_smoothness_2d * self.C(
+                    self.cfg.loss.lambda_normal_smoothness_2d
+                )
             else:
-                self.log(f"train/loss_normal_smoothness_2d_2nd_{step}", loss_normal_smoothness_2d)
-                regu_loss += loss_normal_smoothness_2d * self.C(self.cfg.loss.lambda_normal_smoothness_2d_2nd)
+                self.log(
+                    f"train/loss_normal_smoothness_2d_2nd_{step}",
+                    loss_normal_smoothness_2d,
+                )
+                regu_loss += loss_normal_smoothness_2d * self.C(
+                    self.cfg.loss.lambda_normal_smoothness_2d_2nd
+                )
 
         if "inv_std" in out:
             self.log("train/inv_std", out["inv_std"], prog_bar=True)
@@ -777,7 +874,7 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         if not has_grad:
             if hasattr(fide_loss, "requires_grad") and fide_loss.requires_grad:
                 fide_loss = fide_loss.detach()
-                
+
         if not has_grad:
             if hasattr(regu_loss, "requires_grad") and regu_loss.requires_grad:
                 regu_loss = regu_loss.detach()
@@ -787,25 +884,25 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
             "regularization_loss": regu_loss,
         }
 
-
     def _save_image_grid(
-        self, 
+        self,
         batch,
         batch_idx,
         out,
         phase="val",
         render="1st",
     ):
-        
         assert phase in ["val", "test"]
 
         # save the image with the same name as the prompt
         if "name" in batch:
-            name = batch['name'][0].replace(',', '').replace('.', '').replace(' ', '_')
+            name = batch["name"][0].replace(",", "").replace(".", "").replace(" ", "_")
         else:
-            name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
+            name = (
+                batch["prompt"][0].replace(",", "").replace(".", "").replace(" ", "_")
+            )
         # specify the image name
-        image_name  = f"it{self.true_global_step}-{phase}-{render}/{name}/{str(batch['index'][batch_idx].item())}.png"
+        image_name = f"it{self.true_global_step}-{phase}-{render}/{name}/{str(batch['index'][batch_idx].item())}.png"
         # specify the verbose name
         verbose_name = f"{phase}_{render}_step"
 
@@ -818,7 +915,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 [
                     {
                         "type": "rgb",
-                        "img": out["comp_rgb"][batch_idx] if not self.cfg.rgb_as_latents else out["decoded_rgb"][batch_idx],
+                        "img": out["comp_rgb"][batch_idx]
+                        if not self.cfg.rgb_as_latents
+                        else out["decoded_rgb"][batch_idx],
                         "kwargs": {"data_format": "HWC"},
                     },
                 ]
@@ -829,7 +928,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 [
                     {
                         "type": "rgb",
-                        "img": out["comp_normal_cam_vis_white"][batch_idx] if "comp_normal_cam_vis_white" in out else out["comp_normal"][batch_idx],
+                        "img": out["comp_normal_cam_vis_white"][batch_idx]
+                        if "comp_normal_cam_vis_white" in out
+                        else out["comp_normal"][batch_idx],
                         "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                     }
                 ]
@@ -847,7 +948,9 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                 [
                     {
                         "type": "grayscale",
-                        "img": out['disparity'][batch_idx, :, :, 0] if 'disparity' in out else normalize(out["depth"][batch_idx, :, :, 0]),
+                        "img": out["disparity"][batch_idx, :, :, 0]
+                        if "disparity" in out
+                        else normalize(out["depth"][batch_idx, :, :, 0]),
                         "kwargs": {"cmap": None, "data_range": (0, 1)},
                     },
                 ]
@@ -859,15 +962,18 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         )
 
     def on_validation_epoch_end(self):
-        barrier() # wait until all GPUs finish rendering images
+        barrier()  # wait until all GPUs finish rendering images
         filestems = [
-            f"it{self.true_global_step}-val-{render}"
-            for render in ["1st", "2nd"]
+            f"it{self.true_global_step}-val-{render}" for render in ["1st", "2nd"]
         ]
-        if get_rank() == 0: # only remove from one process
+        if get_rank() == 0:  # only remove from one process
             for filestem in filestems:
                 files = os.listdir(os.path.join(self.get_save_dir(), filestem))
-                files = [f for f in files if os.path.isdir(os.path.join(self.get_save_dir(), filestem, f))]
+                files = [
+                    f
+                    for f in files
+                    if os.path.isdir(os.path.join(self.get_save_dir(), filestem, f))
+                ]
                 for prompt in tqdm(
                     files,
                     desc="Generating validation videos",
@@ -896,15 +1002,18 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                         )
 
     def on_test_epoch_end(self):
-        barrier() # wait until all GPUs finish rendering images
+        barrier()  # wait until all GPUs finish rendering images
         filestems = [
-            f"it{self.true_global_step}-test-{render}"
-            for render in ["1st", "2nd"]
+            f"it{self.true_global_step}-test-{render}" for render in ["1st", "2nd"]
         ]
-        if get_rank() == 0: # only remove from one process
+        if get_rank() == 0:  # only remove from one process
             for filestem in filestems:
                 files = os.listdir(os.path.join(self.get_save_dir(), filestem))
-                files = [f for f in files if os.path.isdir(os.path.join(self.get_save_dir(), filestem, f))]
+                files = [
+                    f
+                    for f in files
+                    if os.path.isdir(os.path.join(self.get_save_dir(), filestem, f))
+                ]
                 for prompt in tqdm(
                     files,
                     desc="Generating validation videos",
@@ -932,7 +1041,6 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
                             # multithreaded=True,
                         )
 
-
     def on_predict_start(self) -> None:
         self.exporter: Exporter = threestudio.find(self.cfg.exporter_type)(
             self.cfg.exporter,
@@ -942,27 +1050,35 @@ class MultipromptDualRendererMultiStepGeneratorSystem(BaseLift3DSystem):
         )
 
     def predict_step(self, batch, batch_idx):
-        space_cache = self.test_step(batch, batch_idx, render_images=self.exporter.cfg.save_video, return_space_cache=True)
+        space_cache = self.test_step(
+            batch,
+            batch_idx,
+            render_images=self.exporter.cfg.save_video,
+            return_space_cache=True,
+        )
         # update the space_cache into the exporter
         exporter_output: List[ExporterOutput] = self.exporter(space_cache)
 
         # specify the name
         if "name" in batch:
-            name = batch['name'][0].replace(',', '').replace('.', '').replace(' ', '_')
+            name = batch["name"][0].replace(",", "").replace(".", "").replace(" ", "_")
         else:
-            name = batch['prompt'][0].replace(',', '').replace('.', '').replace(' ', '_')
+            name = (
+                batch["prompt"][0].replace(",", "").replace(".", "").replace(" ", "_")
+            )
 
         for out in exporter_output:
             save_func_name = f"save_{out.save_type}"
             if not hasattr(self, save_func_name):
                 raise ValueError(f"{save_func_name} not supported by the SaverMixin")
             save_func = getattr(self, save_func_name)
-            save_func(f"it{self.true_global_step}-export/{name}/{out.save_name}", **out.params)
+            save_func(
+                f"it{self.true_global_step}-export/{name}/{out.save_name}", **out.params
+            )
 
     def on_predict_epoch_end(self) -> None:
         if self.exporter.cfg.save_video:
             self.on_test_epoch_end()
-
 
     # def on_test_epoch_start(self) -> None:
     #     # save state_dict

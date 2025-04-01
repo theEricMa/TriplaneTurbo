@@ -1,7 +1,3 @@
-import numpy as np
-import torch
-import torch.nn.functional as F
-
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
@@ -10,8 +6,10 @@ import torch.nn.functional as F
 from jaxtyping import Float, Integer
 from torch import Tensor
 
+
 def dot(x, y):
     return torch.sum(x * y, -1, keepdim=True)
+
 
 class Mesh:
     def __init__(
@@ -33,7 +31,6 @@ class Mesh:
         self.extras[k] = v
 
     def remove_outlier(self, outlier_n_faces_threshold: Union[int, float]):
-
         # use trimesh to first split the mesh into connected components
         # then remove the components with less than n_face_threshold faces
         import trimesh
@@ -46,7 +43,6 @@ class Mesh:
 
         # split the mesh into connected components
         components = mesh.split(only_watertight=False)
-
 
         n_faces_threshold: int
         if isinstance(outlier_n_faces_threshold, float):
@@ -187,7 +183,6 @@ class Mesh:
     def _unwrap_uv(
         self, xatlas_chart_options: dict = {}, xatlas_pack_options: dict = {}
     ):
-
         import xatlas
 
         atlas = xatlas.Atlas()

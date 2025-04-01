@@ -1,5 +1,5 @@
-import os
 import json
+import os
 import random
 from dataclasses import dataclass, field
 
@@ -9,13 +9,12 @@ from torch.utils.data import DataLoader, Dataset, IterableDataset, SequentialSam
 
 import threestudio
 from threestudio import register
+from threestudio.data.uncond import RandomCameraDataset, RandomCameraIterableDataset
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
-
-from threestudio.utils.typing import *
-from threestudio.data.uncond import RandomCameraIterableDataset, RandomCameraDataset
-
 from threestudio.utils.misc import get_rank
+from threestudio.utils.typing import *
+
 
 @dataclass
 class MultipromptRandomCameraDataModuleConfig:
@@ -54,15 +53,18 @@ class MultipromptRandomCameraDataModuleConfig:
     prompt_library_format: str = "json"
     eval_prompt: Optional[str] = None
     target_prompt: Optional[str] = None
-    eval_fix_camera: Optional[int] = None # can be int, then fix the camera to the specified view
-    
+    eval_fix_camera: Optional[
+        int
+    ] = None  # can be int, then fix the camera to the specified view
+
+
 class MultipromptRandomCameraIterableDataset(RandomCameraIterableDataset):
     def __init__(self, cfg: Any, prompt_library: Dict) -> None:
         # just follow original initialization
         super().__init__(cfg)
         assert "train" in prompt_library, "prompt library must contain train split"
-        self.prompt_library = prompt_library["train"] # make it a ordered list
-        
+        self.prompt_library = prompt_library["train"]  # make it a ordered list
+
     def __iter__(self):
         while True:
             yield {}
@@ -74,34 +76,39 @@ class MultipromptRandomCameraIterableDataset(RandomCameraIterableDataset):
         batch_dict["noise"] = torch.randn(self.batch_size, self.cfg.dim_gaussian)
         # randomly select prompt from a list
         if len(self.prompt_library) < self.batch_size:
-            batch_dict["prompt"] = random.choices(self.prompt_library, k=self.batch_size)
+            batch_dict["prompt"] = random.choices(
+                self.prompt_library, k=self.batch_size
+            )
         else:
             batch_dict["prompt"] = random.sample(self.prompt_library, k=self.batch_size)
 
         return batch_dict
-    
+
+
 class MultipromptRandomCameraDataset4Test(IterableDataset):
     def __init__(self, cfg: Any, split: str, prompt_library: Dict) -> None:
         # just follow original initialization
-        self.dataset = RandomCameraDataset(cfg = cfg, split = split)
-        self.cfg =  self.dataset.cfg
+        self.dataset = RandomCameraDataset(cfg=cfg, split=split)
+        self.cfg = self.dataset.cfg
         self.n_views = self.dataset.n_views
         # then add gaussian noise, set up the start and end point for interpolation
-        start_point = torch.randn(self.cfg.dim_gaussian)  # TODO, is this the right way to initialize, when using DDP?
+        start_point = torch.randn(
+            self.cfg.dim_gaussian
+        )  # TODO, is this the right way to initialize, when using DDP?
         end_point = torch.randn(self.cfg.dim_gaussian)
         self.noises = torch.stack(
-                [
-                    start_point + (end_point - start_point) * i / self.n_views \
-                        for i in range(self.n_views)
-                ]
-            )
-        self.prompt_library = prompt_library[split] if split in prompt_library else prompt_library["val"]
+            [
+                start_point + (end_point - start_point) * i / self.n_views
+                for i in range(self.n_views)
+            ]
+        )
+        self.prompt_library = (
+            prompt_library[split] if split in prompt_library else prompt_library["val"]
+        )
 
     def __iter__(self):
         for prompt in self.prompt_library:
-            yield {
-                "prompt": [prompt]
-            }
+            yield {"prompt": [prompt]}
 
     def collate(self, batch):
         if not hasattr(self, "n_views_cache"):
@@ -110,24 +117,30 @@ class MultipromptRandomCameraDataset4Test(IterableDataset):
                 batch_dict = self.dataset.__getitem__(i)
                 batch_dict_list.append(batch_dict)
             # collate the batch_dict_list
-            self.n_views_cache = torch.utils.data._utils.collate.default_collate(batch_dict_list)
-    
+            self.n_views_cache = torch.utils.data._utils.collate.default_collate(
+                batch_dict_list
+            )
+
         batch_dict = self.n_views_cache.copy()
         # then add gaussian noise
         batch_dict["noise"] = self.noises[0][None, :]
         # then add prompt
         batch_dict.update(batch)
         # override the height and width
-        batch_dict['height'] = self.cfg.eval_height
-        batch_dict['width'] = self.cfg.eval_width
+        batch_dict["height"] = self.cfg.eval_height
+        batch_dict["width"] = self.cfg.eval_width
         return batch_dict
-    
+
 
 class MultipromptRandomCameraDataset4FixPrompt(IterableDataset):
-    def __init__(self, cfg: Any, split: str,) -> None:
+    def __init__(
+        self,
+        cfg: Any,
+        split: str,
+    ) -> None:
         # just follow original initialization
-        self.dataset = RandomCameraDataset(cfg = cfg, split = split)
-        self.cfg =  self.dataset.cfg
+        self.dataset = RandomCameraDataset(cfg=cfg, split=split)
+        self.cfg = self.dataset.cfg
         self.n_views = self.dataset.n_views
         # then add gaussian noise
         self.noise = torch.zeros(self.cfg.dim_gaussian)
@@ -139,7 +152,7 @@ class MultipromptRandomCameraDataset4FixPrompt(IterableDataset):
     def __iter__(self):
         for idx in range(self.n_views):
             yield self.__getitem__(idx)
-    
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         # just follow original getitem
         if self.fix_camera:
@@ -147,7 +160,7 @@ class MultipromptRandomCameraDataset4FixPrompt(IterableDataset):
             batch_dict = self.dataset.__getitem__(self.fix_camera)
         else:
             batch_dict = self.dataset.__getitem__(idx)
-            
+
         # then add gaussian noise
         batch_dict["noise"] = self.noise
         # then that's it
@@ -160,52 +173,71 @@ class MultipromptRandomCameraDataset4FixPrompt(IterableDataset):
             batch_dict["prompt_target"] = self.target_prompt
             batch_dict["ratio"] = self.ratios[idx]
 
-        batch_dict["name"] = '_to_'.join([self.eval_prompt, self.target_prompt]) if self.target_prompt is not None else self.eval_prompt
+        batch_dict["name"] = (
+            "_to_".join([self.eval_prompt, self.target_prompt])
+            if self.target_prompt is not None
+            else self.eval_prompt
+        )
 
         return batch_dict
+
 
 @register("multi-prompt-random-camera-datamodule")
 class RandomCameraDataModule(pl.LightningDataModule):
     cfg: MultipromptRandomCameraDataModuleConfig
-    
+
     def __init__(self, cfg: Optional[Union[dict, DictConfig]] = None) -> None:
         super().__init__()
         self.cfg = parse_structured(MultipromptRandomCameraDataModuleConfig, cfg)
-        path = os.path.join(
-            self.cfg.prompt_library_dir, 
-            self.cfg.prompt_library) \
-                + "." + self.cfg.prompt_library_format
+        path = (
+            os.path.join(self.cfg.prompt_library_dir, self.cfg.prompt_library)
+            + "."
+            + self.cfg.prompt_library_format
+        )
         with open(path, "r") as f:
             self.prompt_library = json.load(f)
-            
+
             # each process only has a subset of the prompt library!
             rank = get_rank()
             num_gpu = torch.cuda.device_count()
             for key in self.prompt_library:
-                self.prompt_library[key] = self.prompt_library[key][
-                    rank::num_gpu
-                ]
-
+                self.prompt_library[key] = self.prompt_library[key][rank::num_gpu]
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
-            self.train_dataset = MultipromptRandomCameraIterableDataset(self.cfg, prompt_library=self.prompt_library)
+            self.train_dataset = MultipromptRandomCameraIterableDataset(
+                self.cfg, prompt_library=self.prompt_library
+            )
         if stage in (None, "fit", "validate"):
-            self.val_dataset = MultipromptRandomCameraDataset4Test(self.cfg, "val", prompt_library=self.prompt_library)
+            self.val_dataset = MultipromptRandomCameraDataset4Test(
+                self.cfg, "val", prompt_library=self.prompt_library
+            )
         if stage in (None, "test", "predict"):
             if self.cfg.eval_prompt is not None:
                 # fix the prompt during evaluation
                 self.use_fix_prompt = True
-                self.test_dataset = MultipromptRandomCameraDataset4FixPrompt(self.cfg, "test", )
+                self.test_dataset = MultipromptRandomCameraDataset4FixPrompt(
+                    self.cfg,
+                    "test",
+                )
             else:
                 self.use_fix_prompt = False
-                self.test_dataset = MultipromptRandomCameraDataset4Test(self.cfg, "test", prompt_library=self.prompt_library)
+                self.test_dataset = MultipromptRandomCameraDataset4Test(
+                    self.cfg, "test", prompt_library=self.prompt_library
+                )
                 # todo, is it ok to use test_dataset for prediction?
 
     def prepare_data(self) -> None:
         pass
 
-    def general_loader(self, dataset, batch_size, shuffle = None, sampler = None, collate_fn: Optional[Callable] = None) -> DataLoader:
+    def general_loader(
+        self,
+        dataset,
+        batch_size,
+        shuffle=None,
+        sampler=None,
+        collate_fn: Optional[Callable] = None,
+    ) -> DataLoader:
         return DataLoader(
             dataset,
             # very important to disable multi-processing if you want to change self attributes at runtime!
@@ -216,30 +248,38 @@ class RandomCameraDataModule(pl.LightningDataModule):
             shuffle=shuffle,
             sampler=sampler,
         )
-    
+
     def train_dataloader(self) -> DataLoader:
         return self.general_loader(
-            self.train_dataset, batch_size=None, collate_fn=self.train_dataset.collate, #shuffle=True
+            self.train_dataset,
+            batch_size=None,
+            collate_fn=self.train_dataset.collate,  # shuffle=True
         )
-    
+
     def val_dataloader(self) -> DataLoader:
         return self.general_loader(
-            self.val_dataset, batch_size=None, collate_fn=self.val_dataset.collate, #sampler=SequentialSampler(self.val_dataset)
+            self.val_dataset,
+            batch_size=None,
+            collate_fn=self.val_dataset.collate,  # sampler=SequentialSampler(self.val_dataset)
         )
         # return self.general_loader(self.train_dataset, batch_size=None, collate_fn=self.train_dataset.collate)
 
     def test_dataloader(self) -> DataLoader:
         if self.use_fix_prompt:
             return self.general_loader(
-                self.test_dataset, batch_size=1,
+                self.test_dataset,
+                batch_size=1,
             )
         else:
             return self.general_loader(
-                self.test_dataset, batch_size=None, collate_fn=self.test_dataset.collate, #sampler=SequentialSampler(self.test_dataset)
+                self.test_dataset,
+                batch_size=None,
+                collate_fn=self.test_dataset.collate,  # sampler=SequentialSampler(self.test_dataset)
             )
 
     def predict_dataloader(self) -> DataLoader:
         return self.general_loader(
-            self.test_dataset, batch_size=None, collate_fn=self.test_dataset.collate, #sampler=SequentialSampler(self.test_dataset)
+            self.test_dataset,
+            batch_size=None,
+            collate_fn=self.test_dataset.collate,  # sampler=SequentialSampler(self.test_dataset)
         )
-    

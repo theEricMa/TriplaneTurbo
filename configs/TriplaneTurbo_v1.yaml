@@ -6,7 +6,7 @@ seed: 0
 data_type: "multiview-multiprompt-dualrenderer-multistep-datamodule-v2"
 data:
   batch_size: 8 # should be the multiple of n_views
-  n_view: 4 
+  n_view: 4
   width: 512
   height: 512 # so high resolution !!
   ray_height: 128
@@ -30,7 +30,7 @@ data:
   camera_data_dir: "none"
   frontal_idx: 24 # 24 is the frontal view
   sup_unsup_mode: "vanilla" # "vanilla"
-  dim_gaussian: [6, 4, 32, 32] 
+  dim_gaussian: [6, 4, 32, 32]
   pure_zeros: false
   # for training
   n_steps: ${system.num_parts_training}
@@ -54,7 +54,7 @@ data:
 system_type: "multiprompt-dual-renderer-multistep-generator-system"
 system:
   initialize_shape: false # #true #
-  visualize_samples: false 
+  visualize_samples: false
   parallel_guidance: false # set true for speed-up when you have enough VRAM
 
   # gradient_accumulation_steps: 1 # to replace the accumulate_grad_batches because it is not supported in our method
@@ -62,8 +62,8 @@ system:
   num_parts_training: 4 # TBD
   num_steps_training: 4 # TBD
   num_steps_sampling: 4
-  noise_scheduler: "ddpm" 
-  sample_scheduler: "ddim" 
+  noise_scheduler: "ddpm"
+  sample_scheduler: "ddim"
   noise_addition: "gaussian" # TBD, any of "gaussian", "zero", "pred"
 
   scheduler_dir: ${system.geometry.space_generator_config.pretrained_model_name_or_path}
@@ -72,7 +72,7 @@ system:
 
   geometry_type: "few-step-triplane-dual-stable-diffusion"
   geometry:
-    radius: 1. 
+    radius: 1.
     normal_type: "analytic"
 
     sdf_bias: sphere
@@ -86,7 +86,7 @@ system:
 
     space_generator_config:
       pretrained_model_name_or_path: "pretrained/stable-diffusion-2-1-base"
-      training_type: "self_lora_rank_16-cross_lora_rank_16-locon_rank_16" 
+      training_type: "self_lora_rank_16-cross_lora_rank_16-locon_rank_16"
       timestep: 999
       output_dim: 64 # 32 * 2 for split_channels = v1
       self_lora_type: "hexa_v1"
@@ -135,7 +135,7 @@ system:
       use_volsdf: false
       trainable_variance: false # important!
       learned_variance_init: 0.4605  # 0.4605 = log(100) / 10, 100 is the most common variance across the prompts
-      
+
       rgb_grad_shrink: [0, 1, 0.01, 20000]
 
       estimator: importance
@@ -146,7 +146,7 @@ system:
       far_plane: 4.0
       train_chunk_size: 0 #100000
     patch_size: 40  # 40 * 40 = 1600
-    global_downsample: 3 # 128 / 3 ~= 42, 42*42=1764, 
+    global_downsample: 3 # 128 / 3 ~= 42, 42*42=1764,
     # 1600 + 1764 = 3364 < 4096 = 64 * 64
 
   guidance_type: "richdreamer-mvdream-stablediffusion-asynchronous-score-distillation-guidance"
@@ -156,7 +156,7 @@ system:
     mv_min_step_percent: [0, 0.5, 0.02, 20000]
     mv_max_step_percent: 0.98
     mv_model_name_or_path: "sd-v2.1-base-4view"
-    mv_ckpt_path: "pretrained/sd-v2.1-base-4view.pt" 
+    mv_ckpt_path: "pretrained/sd-v2.1-base-4view.pt"
     mv_weight: 1.
     mv_guidance_scale: [0, 20., 10., 20000]
     mv_weighting_strategy: "dmd"
@@ -208,12 +208,12 @@ system:
       name: None
 
   loss:
-    weighting_strategy: "v1" 
+    weighting_strategy: "v1"
 
     lambda_asd: 1.
     lambda_orient: 0.
     lambda_sparsity: 0
-    lambda_opaque: 0 
+    lambda_opaque: 0
     lambda_z_variance: 0.
     lambda_eikonal: 0.
     lambda_normal_consistency: 0.
@@ -224,12 +224,12 @@ system:
     lambda_asd_2nd: 1.
     lambda_orient_2nd: 0.
     lambda_sparsity_2nd: [0, 1., 0., 20000]
-    lambda_opaque_2nd: 0. 
+    lambda_opaque_2nd: 0.
     lambda_z_variance_2nd: 0.
     lambda_eikonal_2nd: [0, 1., 0., 20000]
     lambda_normal_consistency_2nd: 0.
     lambda_laplacian_smoothness_2nd: 0.
-    lambda_normal_smoothness_2d_2nd: 0. 
+    lambda_normal_smoothness_2d_2nd: 0.
     lambda_sdf_abs_2nd: 0. # should not be used!
 
   optimizer:

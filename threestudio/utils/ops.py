@@ -53,6 +53,7 @@ class _TruncExp(Function):  # pylint: disable=abstract-method
         x = ctx.saved_tensors[0]
         return g * torch.exp(torch.clamp(x, max=15))
 
+
 class CustomMultiply(Function):
     @staticmethod
     @custom_fwd
@@ -63,7 +64,7 @@ class CustomMultiply(Function):
     @custom_bwd
     def backward(ctx, grad_scale):
         return None, grad_scale
-    
+
 
 class SpecifyGradient(Function):
     # Implementation from stable-dreamfusion
@@ -116,7 +117,9 @@ def get_activation(name) -> Callable:
         return lambda x: x * 0.5 + 0.5
     # manually added activation functions
     elif name == "sigmoid-mipnerf":
-        return lambda x: torch.sigmoid(x) * (1 + 2*0.001) - 0.001  # Uses sigmoid clamping from MipNeRF
+        return (
+            lambda x: torch.sigmoid(x) * (1 + 2 * 0.001) - 0.001
+        )  # Uses sigmoid clamping from MipNeRF
     else:
         try:
             return getattr(F, name)
@@ -230,19 +233,20 @@ def get_ray_directions(
 
     return directions
 
+
 def get_ortho_rays(
-        origins: Float[Tensor, "... 3"],
-        directions: Float[Tensor, "... 3"],
-        c2w: Float[Tensor, "... 4 4"],
-        keepdim=False,
-        noise_scale=0.0,
-        normalize=True,
-    ) -> Tuple[Float[Tensor, "... 3"], Float[Tensor, "... 3"]]:
+    origins: Float[Tensor, "... 3"],
+    directions: Float[Tensor, "... 3"],
+    c2w: Float[Tensor, "... 4 4"],
+    keepdim=False,
+    noise_scale=0.0,
+    normalize=True,
+) -> Tuple[Float[Tensor, "... 3"], Float[Tensor, "... 3"]]:
     # Rotate ray directions from camera coordinate to the world coordinate
     assert directions.shape[-1] == 3
     assert origins.shape[-1] == 3
 
-    if directions.ndim == 2: # (N_rays, 3)
+    if directions.ndim == 2:  # (N_rays, 3)
         if c2w.ndim == 2:  # (4, 4)
             c2w = c2w[None, :, :]
         assert c2w.ndim == 3  # (N_rays, 4, 4) or (1, 4, 4)
@@ -250,7 +254,7 @@ def get_ortho_rays(
         rays_o = (origins[:, None, :] * c2w[:, :3, :3]).sum(-1)  # (N_rays, 3)
         rays_o = c2w[:, :3, 3].expand(rays_d.shape) + rays_o
         # rays_o = torch.matmul(c2w[:, :3, :3], origins[:, :, None]).squeeze()  # (N_rays, 3)
-        # rays_o = c2w[:,:3,3].expand(rays_d.shape) + rays_o  
+        # rays_o = c2w[:,:3,3].expand(rays_d.shape) + rays_o
     elif directions.ndim == 3:  # (H, W, 3)
         assert c2w.ndim in [2, 3]
         if c2w.ndim == 2:  # (4, 4)
@@ -258,31 +262,25 @@ def get_ortho_rays(
             rays_d = (directions[:, :, None, :] * c2w[None, None, :3, :3]).sum(
                 -1
             )  # (H, W, 3)
-            rays_o = (origins[:, :, None, :] * c2w[None, None, :3, :3]).sum(
-                -1
-            )
+            rays_o = (origins[:, :, None, :] * c2w[None, None, :3, :3]).sum(-1)
             rays_o = c2w[None, None, :3, 3].expand(rays_d.shape) + rays_o
             # rays_o = torch.matmul(c2w[None, None, :3, :3], origins[:, :, :, None]).squeeze()  # (H, W, 3)
-            # rays_o = c2w[None, None,:3,3].expand(rays_d.shape) + rays_o  
+            # rays_o = c2w[None, None,:3,3].expand(rays_d.shape) + rays_o
         elif c2w.ndim == 3:  # (B, 4, 4)
             rays_d = (directions[None, :, :, None, :] * c2w[:, None, None, :3, :3]).sum(
                 -1
             )  # (B, H, W, 3)
-            rays_o = (origins[None, :, :, None, :] * c2w[:, None, None, :3, :3]).sum(
-                -1
-            )
+            rays_o = (origins[None, :, :, None, :] * c2w[:, None, None, :3, :3]).sum(-1)
             rays_o = c2w[:, None, None, :3, 3].expand(rays_d.shape) + rays_o
             # rays_o = torch.matmul(c2w[:,None, None, :3, :3], origins[None, :, :, :, None]).squeeze()  # # (B, H, W, 3)
-            # rays_o = c2w[:,None, None, :3,3].expand(rays_d.shape) + rays_o  
+            # rays_o = c2w[:,None, None, :3,3].expand(rays_d.shape) + rays_o
     elif directions.ndim == 4:  # (B, H, W, 3)
         # import pdb; pdb.set_trace()
         assert c2w.ndim == 3  # (B, 4, 4)
         rays_d = (directions[:, :, :, None, :] * c2w[:, None, None, :3, :3]).sum(
             -1
         )  # (B, H, W, 3)
-        rays_o = (origins[:, :, :, None, :] * c2w[:, None, None, :3, :3]).sum(
-            -1
-        )
+        rays_o = (origins[:, :, :, None, :] * c2w[:, None, None, :3, :3]).sum(-1)
         rays_o = c2w[:, None, None, :3, 3].expand(rays_d.shape) + rays_o
 
     # add camera noise to avoid grid-like artifect
@@ -297,6 +295,7 @@ def get_ortho_rays(
         rays_o, rays_d = rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
 
     return rays_o, rays_d
+
 
 def get_rays(
     directions: Float[Tensor, "... 3"],
@@ -361,13 +360,16 @@ def get_projection_matrix(
     proj_mtx[:, 3, 2] = -1.0
     return proj_mtx
 
+
 def get_ortho_projection_matrix(
-        left: float, right: float, bottom: float, top: float, near: float, far: float
+    left: float, right: float, bottom: float, top: float, near: float, far: float
 ) -> Float[Tensor, "4 4"]:
     projection_matrix = torch.zeros(4, 4, dtype=torch.float32)
 
     projection_matrix[0, 0] = 2.0 / (right - left)
-    projection_matrix[1, 1] = -2.0 / (top - bottom) # add a negative sign here as the y axis is flipped in nvdiffrast output
+    projection_matrix[1, 1] = -2.0 / (
+        top - bottom
+    )  # add a negative sign here as the y axis is flipped in nvdiffrast output
     projection_matrix[2, 2] = -2.0 / (far - near)
 
     projection_matrix[0, 3] = -(right + left) / (right - left)

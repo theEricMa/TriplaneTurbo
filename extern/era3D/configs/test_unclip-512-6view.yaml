@@ -16,7 +16,7 @@ save_dir: 'mv_res'
 save_mode: 'rgba' # 'concat', 'rgba', 'rgb'
 seed: 42
 validation_batch_size: 1
-dataloader_num_workers: 1 
+dataloader_num_workers: 1
 local_rank: -1
 
 pipe_kwargs:
@@ -34,16 +34,16 @@ unet_from_pretrained_kwargs:
   unclip: true
   sdxl: false
   num_views: ${num_views}
-  sample_size: 64 
+  sample_size: 64
   zero_init_conv_in: false # modify
-  
+
   regress_elevation: ${regress_elevation}
   regress_focal_length: ${regress_focal_length}
   camera_embedding_type: e_de_da_sincos
-  projection_camera_embeddings_input_dim: 4 # 2 for elevation and 6 for focal_length  
+  projection_camera_embeddings_input_dim: 4 # 2 for elevation and 6 for focal_length
   zero_init_camera_projection: false
   num_regress_blocks: 3
-  
+
   cd_attention_last: false
   cd_attention_mid: false
   multiview_attention: true

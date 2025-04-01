@@ -4,15 +4,15 @@ from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from transformers import AutoTokenizer, CLIPTextModel
 
 import threestudio
-from threestudio.utils.misc import cleanup
+from threestudio.utils.misc import cleanup, get_rank
 from threestudio.utils.typing import *
 
 from .base_callable import MultiRefProcessor, hash_prompt
-from threestudio.utils.misc import get_rank
-from tqdm import tqdm
+
 
 @threestudio.register("stable-diffusion-multi-prompt-processor-callable")
 class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
@@ -30,7 +30,8 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
         other_prompts: list = field(
             default_factory=lambda: [
                 "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
-        ])
+            ]
+        )
 
     cfg: Config
 
@@ -41,7 +42,8 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
         )
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         text_encoder = CLIPTextModel.from_pretrained(
-            self.cfg.pretrained_model_name_or_path, subfolder="text_encoder",
+            self.cfg.pretrained_model_name_or_path,
+            subfolder="text_encoder",
         ).to(self.device)
 
         for p in text_encoder.parameters():
@@ -52,7 +54,6 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
             "text_encoder": text_encoder,
         }
 
-
     def func_text(
         self,
         pretrained_model_name_or_path: str,
@@ -61,13 +62,11 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
         tokenizer: Optional[AutoTokenizer] = None,
         text_encoder: Optional[CLIPTextModel] = None,
     ) -> Any:
-        
         if tokenizer is None or text_encoder is None:
             modules = self.load_model_text()
             tokenizer = modules.pop("tokenizer")
             text_encoder = modules.pop("text_encoder")
 
-        
         if type(prompts) == str:
             prompts = [prompts]
 
@@ -79,16 +78,18 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
                 return_tensors="pt",
             )
             # avoid exceeding max_length
-            tokens.input_ids = tokens.input_ids[:, :tokenizer.model_max_length]
-            
+            tokens.input_ids = tokens.input_ids[:, : tokenizer.model_max_length]
+
             outputs = text_encoder(tokens.input_ids.to(text_encoder.device))
             # we need both the local and global text embeddings
-            locals_text_embeddings, globla_text_embeddings= outputs[0], outputs[1]
+            locals_text_embeddings, globla_text_embeddings = outputs[0], outputs[1]
 
-        for prompt, globla_text_embedding, locals_text_embedding in zip(prompts, globla_text_embeddings, locals_text_embeddings):
+        for prompt, globla_text_embedding, locals_text_embedding in zip(
+            prompts, globla_text_embeddings, locals_text_embeddings
+        ):
             # save the global text embeddings
             torch.save(
-                globla_text_embedding.cpu(), # [0] is to remove the batch dimension
+                globla_text_embedding.cpu(),  # [0] is to remove the batch dimension
                 os.path.join(
                     cache_dir,
                     f"{hash_prompt(pretrained_model_name_or_path, prompt, 'global')}.pt",
@@ -97,16 +98,15 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
 
             # save the local text embeddings
             torch.save(
-                locals_text_embedding.cpu(), # [0] is to remove the batch dimension
+                locals_text_embedding.cpu(),  # [0] is to remove the batch dimension
                 os.path.join(
                     cache_dir,
                     f"{hash_prompt(pretrained_model_name_or_path, prompt, 'local')}.pt",
                 ),
             )
 
-
     def spawn_func_text(
-        self, 
+        self,
         args,
     ):
         pretrained_model_name_or_path, prompt_list, cache_dir = args
@@ -114,14 +114,13 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
         tokenizer = modules.pop("tokenizer")
         text_encoder = modules.pop("text_encoder")
 
-        batch_size = 32 # hard coded batch size
+        batch_size = 32  # hard coded batch size
         rank = get_rank()
         for i in tqdm(
             range(0, len(prompt_list), batch_size),
             desc="Saving text embeddings in GPU {}".format(rank),
         ):
-
-            prompts = prompt_list[i:i+batch_size]
+            prompts = prompt_list[i : i + batch_size]
             with torch.no_grad():
                 input_ids = []
                 for prompt in prompts:
@@ -132,17 +131,21 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
                         return_tensors="pt",
                     )
                     # avoid exceeding max_length
-                    tokens.input_ids = tokens.input_ids[:, :tokenizer.model_max_length]
+                    tokens.input_ids = tokens.input_ids[:, : tokenizer.model_max_length]
                     input_ids.append(tokens.input_ids)
-                
-                outputs = text_encoder(torch.cat(input_ids, dim=0).to(text_encoder.device))
-                # we need both the local and global text embeddings
-                locals_text_embeddings, globla_text_embeddings= outputs[0], outputs[1]
 
-            for prompt, globla_text_embedding, locals_text_embedding in zip(prompts, globla_text_embeddings, locals_text_embeddings):
+                outputs = text_encoder(
+                    torch.cat(input_ids, dim=0).to(text_encoder.device)
+                )
+                # we need both the local and global text embeddings
+                locals_text_embeddings, globla_text_embeddings = outputs[0], outputs[1]
+
+            for prompt, globla_text_embedding, locals_text_embedding in zip(
+                prompts, globla_text_embeddings, locals_text_embeddings
+            ):
                 # save the global text embeddings
                 torch.save(
-                    globla_text_embedding.cpu(), # [0] is to remove the batch dimension
+                    globla_text_embedding.cpu(),  # [0] is to remove the batch dimension
                     os.path.join(
                         cache_dir,
                         f"{hash_prompt(pretrained_model_name_or_path, prompt, 'global')}.pt",
@@ -151,13 +154,13 @@ class StableDiffusionMultipromptPromptProcessor(MultiRefProcessor):
 
                 # save the local text embeddings
                 torch.save(
-                    locals_text_embedding.cpu(), # [0] is to remove the batch dimension
+                    locals_text_embedding.cpu(),  # [0] is to remove the batch dimension
                     os.path.join(
                         cache_dir,
                         f"{hash_prompt(pretrained_model_name_or_path, prompt, 'local')}.pt",
                     ),
                 )
-                
+
         del text_encoder
         del tokenizer
         cleanup()

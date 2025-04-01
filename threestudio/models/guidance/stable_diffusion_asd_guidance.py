@@ -1,5 +1,4 @@
 import random
-import random
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -15,11 +14,12 @@ from diffusers import (
 from diffusers.utils.import_utils import is_xformers_available
 
 import threestudio
-from threestudio.utils.ops import perpendicular_component
 from threestudio.models.prompt_processors.base import PromptProcessorOutput
 from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, cleanup, parse_version
+from threestudio.utils.ops import perpendicular_component
 from threestudio.utils.typing import *
+
 
 @threestudio.register("stable-diffusion-asynchronous-score-distillation-guidance")
 class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
@@ -47,8 +47,8 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
 
         view_dependent_prompting: bool = True
 
-        guidance_perp_neg: float = 0.
-        
+        guidance_perp_neg: float = 0.0
+
     cfg: Config
 
     def configure(self) -> None:
@@ -112,7 +112,7 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
         self.scheduler_sample = DPMSolverMultistepScheduler.from_config(
             pipe.scheduler.config
         )
-        
+
         self.num_train_timesteps = self.scheduler.config.num_train_timesteps
         self.set_min_max_steps()  # set to default value
 
@@ -133,24 +133,19 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
         self.min_step = int(self.num_train_timesteps * min_step_percent)
         self.max_step = int(self.num_train_timesteps * max_step_percent)
 
-    def get_t_plus(
-        self, 
-        t: Float[Tensor, "B"]
-    ):
-
+    def get_t_plus(self, t: Float[Tensor, "B"]):
         t_plus = self.cfg.plus_ratio * (t - self.min_step)
         if self.cfg.plus_random:
-            t_plus = (t_plus * torch.rand(*t.shape,device = self.device)).to(torch.long)
+            t_plus = (t_plus * torch.rand(*t.shape, device=self.device)).to(torch.long)
         else:
             t_plus = t_plus.to(torch.long)
         t_plus = t + t_plus
         t_plus = torch.clamp(
             t_plus,
-            1, # T_min
-            self.num_train_timesteps - 1, # T_max
+            1,  # T_min
+            self.num_train_timesteps - 1,  # T_max
         )
         return t_plus
-
 
     @torch.cuda.amp.autocast(enabled=False)
     def forward_unet(
@@ -166,7 +161,7 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
             t.to(self.weights_dtype),
             encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
         ).sample.to(input_dtype)
-    
+
     @torch.cuda.amp.autocast(enabled=False)
     def encode_images(
         self, imgs: Float[Tensor, "B 3 512 512"]
@@ -207,7 +202,7 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
             # encode image into latents with vae
             latents = self.encode_images(rgb_BCHW_512)
         return latents
-    
+
     def __call__(
         self,
         rgb: Float[Tensor, "B H W C"],
@@ -229,7 +224,6 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
 
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
-
             # random timestamp for the first diffusion model
             t = torch.randint(
                 self.min_step,
@@ -241,13 +235,13 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
 
             latents_noisy = self.scheduler.add_noise(latents, noise, t)
 
-            # bigger timestamp 
+            # bigger timestamp
             t_plus = self.get_t_plus(t)
             latents_noisy_second = self.scheduler.add_noise(latents, noise, t_plus)
 
             # pred noise
             noise_pred, noise_pred_second = self.get_eps(
-                latents_noisy, 
+                latents_noisy,
                 latents_noisy_second,
                 t,
                 t_plus,
@@ -269,7 +263,7 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
             raise ValueError(
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
-            
+
         grad = w * (noise_pred - noise_pred_second)
         grad = torch.nan_to_num(grad)
         # clip grad for stable training?
@@ -290,34 +284,37 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
         }
 
         return guidance_out
-    
-    def get_t_plus(
-        self, 
-        t: Float[Tensor, "B"]
-    ):
+
+    def get_t_plus(self, t: Float[Tensor, "B"]):
         if self.cfg.plus_random:
-            if self.cfg.plus_ratio >= 0.:
+            if self.cfg.plus_ratio >= 0.0:
                 # random timestamp for qt
-                t_plus = self.cfg.plus_ratio * torch.rand(*t.shape,device = self.device) * (self.max_step - t)
+                t_plus = (
+                    self.cfg.plus_ratio
+                    * torch.rand(*t.shape, device=self.device)
+                    * (self.max_step - t)
+                )
                 t_plus = t + t_plus.to(torch.long)
             else:
                 # sample according to lower bound
-                t_plus = self.cfg.plus_ratio * torch.rand(*t.shape,device = self.device) * (t - self.min_step)
+                t_plus = (
+                    self.cfg.plus_ratio
+                    * torch.rand(*t.shape, device=self.device)
+                    * (t - self.min_step)
+                )
                 t_plus = t - t_plus.to(torch.long)
         else:
-            if self.cfg.plus_ratio >= 0.:
+            if self.cfg.plus_ratio >= 0.0:
                 # bigger timestamp for qt
                 t_plus = t + (self.cfg.plus_ratio * (self.max_step - t)).to(torch.long)
             else:
                 # smaller timestamp for qt
                 t_plus = t - (self.cfg.plus_ratio * (t - self.min_step)).to(torch.long)
         t_plus = torch.clamp(
-            t_plus, 
-            self.min_step, 
-            self.max_step
-        ) # make t_plus in range [min_step, max_step]
+            t_plus, self.min_step, self.max_step
+        )  # make t_plus in range [min_step, max_step]
         return t_plus
-    
+
     @torch.cuda.amp.autocast(enabled=False)
     def forward_unet(
         self,
@@ -346,14 +343,13 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
         unet: nn.Module,
         use_perp_neg: bool = False,
     ) -> Float[Tensor, "B 4 64 64"]:
-
         batch_size = latents_noisy.shape[0]
 
         # assign values to optional arguments
-        guidenace_scale=self.cfg.guidance_scale
-        guidenace_scale_perp_neg=self.cfg.guidance_perp_neg
-        use_perp_neg=self.use_perp_neg
-        
+        guidenace_scale = self.cfg.guidance_scale
+        guidenace_scale_perp_neg = self.cfg.guidance_perp_neg
+        use_perp_neg = self.use_perp_neg
+
         # view dependent prompting
         if use_perp_neg:
             assert prompt_utils.use_perp_neg
@@ -361,39 +357,42 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
                 text_embeddings,
                 neg_guidance_weights,
             ) = prompt_utils.get_text_embeddings_perp_neg(
-                elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting,
+                elevation,
+                azimuth,
+                camera_distances,
+                self.cfg.view_dependent_prompting,
             )
-            neg_guidance_weights = neg_guidance_weights * -1 * guidenace_scale_perp_neg # multiply by a negative value to control its magnitude
-            text_embeddings_vd     = text_embeddings[0 * batch_size: 1 * batch_size]
-            text_embeddings_uncond = text_embeddings[1 * batch_size: 2 * batch_size]
-            text_embeddings_vd_neg = text_embeddings[2 * batch_size: 4 * batch_size]
+            neg_guidance_weights = (
+                neg_guidance_weights * -1 * guidenace_scale_perp_neg
+            )  # multiply by a negative value to control its magnitude
+            text_embeddings_vd = text_embeddings[0 * batch_size : 1 * batch_size]
+            text_embeddings_uncond = text_embeddings[1 * batch_size : 2 * batch_size]
+            text_embeddings_vd_neg = text_embeddings[2 * batch_size : 4 * batch_size]
         else:
             text_embeddings = prompt_utils.get_text_embeddings(
-            elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
+                elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
             )
             neg_guidance_weights = None
-            text_embeddings_vd     = text_embeddings[0 * batch_size: 1 * batch_size]
-            text_embeddings_uncond = text_embeddings[1 * batch_size: 2 * batch_size]
+            text_embeddings_vd = text_embeddings[0 * batch_size : 1 * batch_size]
+            text_embeddings_uncond = text_embeddings[1 * batch_size : 2 * batch_size]
             text_embeddings_vd_neg = None
 
         # collect text embeddings
-        text_embeddings = [text_embeddings_vd] # for the first diffusion model
-        text_embeddings.append(text_embeddings_uncond) 
+        text_embeddings = [text_embeddings_vd]  # for the first diffusion model
+        text_embeddings.append(text_embeddings_uncond)
         if use_perp_neg:
             text_embeddings.append(text_embeddings_vd_neg)
-        text_embeddings.append(text_embeddings_vd) # for the second diffusion model
+        text_embeddings.append(text_embeddings_vd)  # for the second diffusion model
         text_embeddings = torch.cat(text_embeddings, dim=0).to(self.device)
 
         # collect other inputs
         batch_size_t = text_embeddings.shape[0]
-        num_repeats = batch_size_t // batch_size - 1 # -1 for the second diffusion model
-        input_t = torch.cat(
-            [t] * num_repeats + [t_plus],
-            dim=0
-        ).to(self.device)
+        num_repeats = (
+            batch_size_t // batch_size - 1
+        )  # -1 for the second diffusion model
+        input_t = torch.cat([t] * num_repeats + [t_plus], dim=0).to(self.device)
         input_latents_noisy = torch.cat(
-            [latents_noisy] * num_repeats + [latents_noisy_second],
-            dim=0
+            [latents_noisy] * num_repeats + [latents_noisy_second], dim=0
         ).to(self.device)
 
         # compute eps
@@ -406,27 +405,37 @@ class SDTimestepShiftedScoreDistillationGuidance(BaseObject):
             )
 
         # split noise_pred
-        noise_pred_text   = noise_pred[0 * batch_size: 1 * batch_size]
-        noise_pred_uncond = noise_pred[1 * batch_size: 2 * batch_size]
-        noise_pred_vd_neg = noise_pred[2 * batch_size: 4 * batch_size]if use_perp_neg else None
-        noise_pred_second = noise_pred[4 * batch_size: 5 * batch_size] if use_perp_neg else noise_pred[2 * batch_size: 3 * batch_size]
+        noise_pred_text = noise_pred[0 * batch_size : 1 * batch_size]
+        noise_pred_uncond = noise_pred[1 * batch_size : 2 * batch_size]
+        noise_pred_vd_neg = (
+            noise_pred[2 * batch_size : 4 * batch_size] if use_perp_neg else None
+        )
+        noise_pred_second = (
+            noise_pred[4 * batch_size : 5 * batch_size]
+            if use_perp_neg
+            else noise_pred[2 * batch_size : 3 * batch_size]
+        )
 
         # aggregate noise_pred
         eps_pos = noise_pred_text - noise_pred_uncond
-        if neg_guidance_weights is not None: # same as use_perp_neg
+        if neg_guidance_weights is not None:  # same as use_perp_neg
             accum_grad = 0
             n_negative_prompts = neg_guidance_weights.shape[-1]
             for i in range(n_negative_prompts):
-                eps_vd_neg = noise_pred_vd_neg[i::n_negative_prompts] - noise_pred_uncond
+                eps_vd_neg = (
+                    noise_pred_vd_neg[i::n_negative_prompts] - noise_pred_uncond
+                )
                 accum_grad += neg_guidance_weights[:, i].view(
                     -1, *[1] * (eps_vd_neg.ndim - 1)
-                ) * perpendicular_component(eps_vd_neg, eps_pos) # eps_vd_neg # v2
+                ) * perpendicular_component(
+                    eps_vd_neg, eps_pos
+                )  # eps_vd_neg # v2
 
             # noise_pred_p = (eps_pos) * guidenace_scale + noise_pred_uncond + accum_grad
-            noise_pred_p = (eps_pos + accum_grad) * guidenace_scale + noise_pred_uncond 
+            noise_pred_p = (eps_pos + accum_grad) * guidenace_scale + noise_pred_uncond
 
-        else: # if not use_perp_neg
-            noise_pred_p = eps_pos  * guidenace_scale + noise_pred_uncond
+        else:  # if not use_perp_neg
+            noise_pred_p = eps_pos * guidenace_scale + noise_pred_uncond
 
         return noise_pred_p.to(self.device), noise_pred_second.to(self.device)
 

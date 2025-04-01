@@ -44,19 +44,24 @@ class StableDreamer(BaseLift3DSystem):
         self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
         self.prompt_utils = self.prompt_processor()
 
-
     def training_step(self, batch, batch_idx):
         out = self(batch)
 
         if self.cfg.stage == "geometry":
             guidance_inp = out["comp_normal"]
             guidance_out = self.guidance(
-                guidance_inp, self.prompt_utils, **batch, rgb_as_latents=False,
+                guidance_inp,
+                self.prompt_utils,
+                **batch,
+                rgb_as_latents=False,
             )
         else:
             guidance_inp = out["comp_rgb"]
             guidance_out = self.guidance(
-                guidance_inp, self.prompt_utils, **batch, rgb_as_latents=False,
+                guidance_inp,
+                self.prompt_utils,
+                **batch,
+                rgb_as_latents=False,
             )
 
         loss = 0.0
@@ -66,7 +71,7 @@ class StableDreamer(BaseLift3DSystem):
             if name.startswith("loss_"):
                 loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
 
-        if "coarse" in self.cfg.stage: # i.e. coarse or coarse+geometry
+        if "coarse" in self.cfg.stage:  # i.e. coarse or coarse+geometry
             if self.C(self.cfg.loss.lambda_orient) > 0:
                 if "normal" not in out:
                     raise ValueError(
@@ -93,7 +98,7 @@ class StableDreamer(BaseLift3DSystem):
             if self.C(self.cfg.loss.lambda_z_variance) > 0:
                 # z variance loss proposed in HiFA: http://arxiv.org/abs/2305.18766
                 # helps reduce floaters and produce solid geometry
-                if 'z_variance' not in out:
+                if "z_variance" not in out:
                     raise ValueError(
                         "z_variance is required for z_variance loss, no z_variance is found in the output."
                     )
@@ -102,8 +107,11 @@ class StableDreamer(BaseLift3DSystem):
                 loss += loss_z_variance * self.C(self.cfg.loss.lambda_z_variance)
 
             # sdf loss
-            if hasattr(self.cfg.loss, 'lambda_eikonal')  and self.C(self.cfg.loss.lambda_eikonal) > 0:
-                if 'sdf_grad' not in out:
+            if (
+                hasattr(self.cfg.loss, "lambda_eikonal")
+                and self.C(self.cfg.loss.lambda_eikonal) > 0
+            ):
+                if "sdf_grad" not in out:
                     raise ValueError(
                         "sdf is required for eikonal loss, no sdf is found in the output."
                     )
@@ -117,18 +125,24 @@ class StableDreamer(BaseLift3DSystem):
             # addition loss for geometry stage
             if self.cfg.stage == "coarse+geometry":
                 # use the geometry_lr to control the contribution of geometry
-                guidance_inp = torch.nan_to_num(out["comp_normal"], nan=0.0, posinf=0.0, neginf=0.0)
+                guidance_inp = torch.nan_to_num(
+                    out["comp_normal"], nan=0.0, posinf=0.0, neginf=0.0
+                )
                 guidance_out = self.guidance(
-                    guidance_inp, 
-                    self.prompt_utils, 
-                    **batch, 
+                    guidance_inp,
+                    self.prompt_utils,
+                    **batch,
                     rgb_as_latents=False,
                 )
-                lambda_geo = 0.5 # hard-coded lambda
+                lambda_geo = 0.5  # hard-coded lambda
                 for name, value in guidance_out.items():
                     self.log(f"train/shape_{name}", value)
                     if name.startswith("loss_"):
-                        loss += lambda_geo * value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+                        loss += (
+                            lambda_geo
+                            * value
+                            * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+                        )
 
         elif self.cfg.stage == "geometry" or self.cfg.stage == "geometry+texture":
             loss_normal_consistency = out["mesh"].normal_consistency()
@@ -147,24 +161,29 @@ class StableDreamer(BaseLift3DSystem):
             # addition loss for geometry stage
             if self.cfg.stage == "geometry+texture":
                 # use the geometry_lr to control the contribution of geometry
-                guidance_inp = torch.nan_to_num(out["comp_normal"], nan=0.0, posinf=0.0, neginf=0.0)
+                guidance_inp = torch.nan_to_num(
+                    out["comp_normal"], nan=0.0, posinf=0.0, neginf=0.0
+                )
                 guidance_out = self.guidance(
-                    guidance_inp, 
-                    self.prompt_utils, 
-                    **batch, 
+                    guidance_inp,
+                    self.prompt_utils,
+                    **batch,
                     rgb_as_latents=False,
                 )
-                lambda_geo = self.cfg.loss.lambda_geo # hard-coded lambda
+                lambda_geo = self.cfg.loss.lambda_geo  # hard-coded lambda
                 for name, value in guidance_out.items():
                     self.log(f"train/shape_{name}", value)
                     if name.startswith("loss_"):
-                        loss += lambda_geo * value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+                        loss += (
+                            lambda_geo
+                            * value
+                            * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
+                        )
 
         elif self.cfg.stage == "texture":
             pass
         else:
             raise ValueError(f"Unknown stage {self.cfg.stage}")
-
 
         # print("\n current device is:{}".format(loss.device))
         return {"loss": loss}
@@ -173,14 +192,14 @@ class StableDreamer(BaseLift3DSystem):
         out = self(batch)
 
         # visualize the depth
-        if 'depth' in out:
+        if "depth" in out:
             depth = out["depth"][0, :, :, 0]
             depth = (depth - depth.min()) / (depth.max() - depth.min())
 
         self.save_image_grid(
             f"it{self.true_global_step}-val/{batch['index'][0]}.png"
-                if self.cfg.validation_via_video
-                else f"it{self.true_global_step}-{batch['index'][0]}.png",
+            if self.cfg.validation_via_video
+            else f"it{self.true_global_step}-{batch['index'][0]}.png",
             (
                 [
                     {
@@ -218,13 +237,12 @@ class StableDreamer(BaseLift3DSystem):
                         "kwargs": {"cmap": None, "data_range": (0, 1)},
                     },
                 ]
-                if 'depth' in out
+                if "depth" in out
                 else []
             ),
-
-            name=f"validation_step_batchidx_{batch_idx}" 
-                if self.cfg.validation_via_video
-                else "validation_step",
+            name=f"validation_step_batchidx_{batch_idx}"
+            if self.cfg.validation_via_video
+            else "validation_step",
             step=self.true_global_step,
         )
 
@@ -253,7 +271,7 @@ class StableDreamer(BaseLift3DSystem):
         out = self(batch)
 
         # visualize the depth
-        if 'depth' in out:
+        if "depth" in out:
             depth = out["depth"][0, :, :, 0]
             depth = (depth - depth.min()) / (depth.max() - depth.min())
 
@@ -296,7 +314,7 @@ class StableDreamer(BaseLift3DSystem):
                         "kwargs": {"cmap": None, "data_range": (0, 1)},
                     },
                 ]
-                if 'depth' in out
+                if "depth" in out
                 else []
             ),
             name="test_step",

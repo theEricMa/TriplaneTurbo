@@ -1,5 +1,4 @@
 import random
-import random
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -13,27 +12,25 @@ from diffusers import (
     UNet2DConditionModel,
 )
 from diffusers.utils.import_utils import is_xformers_available
+from scipy.spatial.transform import Rotation as R
+from torch.autograd import Variable
+from torch.autograd import grad as torch_grad
+from torch.nn.modules.container import ModuleList
+from torch.utils.checkpoint import checkpoint, checkpoint_sequential
 
 import threestudio
-from threestudio.utils.ops import perpendicular_component
+from extern.mvdream.camera_utils import normalize_camera
+from extern.mvdream.ldm.modules.distributions.distributions import (
+    DiagonalGaussianDistribution,
+)
+from extern.mvdream.model_zoo import build_model as build_model_mv
+from extern.nd_sd.model_zoo import build_model as build_model_rd
 from threestudio.models.prompt_processors.base import PromptProcessorOutput
 from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, cleanup, parse_version
+from threestudio.utils.ops import SpecifyGradient, perpendicular_component
 from threestudio.utils.typing import *
 
-from extern.mvdream.model_zoo import build_model as build_model_mv
-from extern.mvdream.camera_utils import normalize_camera
-
-from extern.nd_sd.model_zoo import build_model as build_model_rd
-
-from torch.utils.checkpoint import checkpoint_sequential, checkpoint
-from torch.nn.modules.container import ModuleList
-from extern.mvdream.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
-
-from scipy.spatial.transform import Rotation as R
-
-from torch.autograd import Variable, grad as torch_grad
-from threestudio.utils.ops import SpecifyGradient
 
 @threestudio.register("richdreamer-mvdream-asynchronous-score-distillation-guidance")
 class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
@@ -46,26 +43,24 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         mv_ckpt_path: Optional[
             str
         ] = None  # path to local checkpoint (None for loading from url)
-        
+
         rd_model_name_or_path: str = "nd-4view"
-        rd_ckpt_path: Optional[
-            str
-        ] = None
+        rd_ckpt_path: Optional[str] = None
 
         # the following is specific to mvdream
         mv_n_view: int = 4
         mv_camera_condition_type: str = "rotation"
         mv_image_size: int = 256
         mv_guidance_scale: float = 7.5
-        mv_weight: float = 0.25 # 1 / 4
-        mv_weighting_strategy: str = "uniform" # asd is suitable for uniform weighting, but can be extended to other strategies
+        mv_weight: float = 0.25  # 1 / 4
+        mv_weighting_strategy: str = "uniform"  # asd is suitable for uniform weighting, but can be extended to other strategies
 
         # the following is specific to richdreamer
         rd_n_view: int = 4
         rd_image_size: int = 32
         rd_guidance_scale: float = 7.5
-        rd_weight: float = 1.
-        rd_weighting_strategy: str = "uniform" # asd is suitable for uniform weighting, but can be extended to other strategies
+        rd_weight: float = 1.0
+        rd_weighting_strategy: str = "uniform"  # asd is suitable for uniform weighting, but can be extended to other strategies
         cam_method: str = "rel_x2"  # rel_x2 or abs or rel
 
         # the following is shared between mvdream and stable diffusion
@@ -106,14 +101,12 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             assert len(timestep_range) == 2
             min_t_ratio, max_t_ratio = timestep_range
             max_t = int(max_t_ratio * (self.max_step - self.min_step) + self.min_step)
-            max_t = max(min(max_t, self.max_step), self.min_step) # clip the value
+            max_t = max(min(max_t, self.max_step), self.min_step)  # clip the value
             min_t = int(min_t_ratio * (self.max_step - self.min_step) + self.min_step)
-            min_t = max(min(min_t, self.max_step), self.min_step) # clip the value
+            min_t = max(min(min_t, self.max_step), self.min_step)  # clip the value
         return min_t, max_t
 
-
     def configure(self) -> None:
-
         ################################################################################################
         if self.cfg.rd_weight > 0:
             threestudio.info(f"Loading RichDreamer ...")
@@ -134,7 +127,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
             if hasattr(self.rd_model, "cond_stage_model"):
                 # delete unused models
-                del self.rd_model.cond_stage_model # text encoder
+                del self.rd_model.cond_stage_model  # text encoder
                 cleanup()
 
         else:
@@ -145,35 +138,31 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             threestudio.info(f"Loading Multiview Diffusion ...")
 
             self.mv_model = build_model_mv(
-                self.cfg.mv_model_name_or_path,
-                ckpt_path=self.cfg.mv_ckpt_path
+                self.cfg.mv_model_name_or_path, ckpt_path=self.cfg.mv_ckpt_path
             ).to(self.device)
             for p in self.mv_model.parameters():
                 p.requires_grad_(False)
 
             if hasattr(self.mv_model, "cond_stage_model"):
                 # delete unused models
-                del self.mv_model.cond_stage_model # text encoder
+                del self.mv_model.cond_stage_model  # text encoder
                 cleanup()
-
 
         else:
             threestudio.info("Multiview Diffusion is disabled.")
 
         ################################################################################################
         # the folowing is shared between mvdream and stable diffusion
-        self.alphas = self.mv_model.alphas_cumprod if hasattr(self, "mv_model") else self.rd_model.alphas_cumprod
+        self.alphas = (
+            self.mv_model.alphas_cumprod
+            if hasattr(self, "mv_model")
+            else self.rd_model.alphas_cumprod
+        )
         self.grad_clip_val: Optional[float] = None
         self.num_train_timesteps = 1000
         self.set_min_max_steps()  # set to default value
 
-
-    def get_t_plus(
-        self, 
-        t: Float[Tensor, "B"],
-        module: str # "rd" or "mv"
-    ):
-        
+    def get_t_plus(self, t: Float[Tensor, "B"], module: str):  # "rd" or "mv"
         # determine the attributes that differ between rd and MV
         if module == "rd":
             plus_random = self.cfg.rd_plus_random
@@ -187,15 +176,15 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # determine the timestamp for the second diffusion model
         if self.cfg.plus_schedule == "linear":
             t_plus = plus_ratio * (t - self.min_step)
-        
+
         elif self.cfg.plus_schedule.startswith("sqrt"):
             bias = 0
-            if self.cfg.plus_schedule.startswith("sqrt_"): # if bias is specified
+            if self.cfg.plus_schedule.startswith("sqrt_"):  # if bias is specified
                 try:
                     bias = float(self.cfg.plus_schedule.split("_")[1])
                 except:
                     raise ValueError(f"Invalid sqrt bias: {self.cfg.plus_schedule}")
-                
+
             # t_plus = plus_ratio * torch.sqrt(t - self.min_step + bias)
             t_plus = plus_ratio * torch.sqrt(t + bias)
         else:
@@ -204,13 +193,13 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # clamp t_plus to the range [0, T_max - t], added in the revision
         t_plus = torch.clamp(
             t_plus,
-            torch.zeros_like(t), 
+            torch.zeros_like(t),
             self.num_train_timesteps - t - 1,
         )
 
         # add the offset
         if plus_random:
-            t_plus = (t_plus * torch.rand(*t.shape,device = self.device)).to(torch.long)
+            t_plus = (t_plus * torch.rand(*t.shape, device=self.device)).to(torch.long)
         else:
             t_plus = t_plus.to(torch.long)
         t_plus = t + t_plus
@@ -218,13 +207,13 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # double check the range in [1, 999]
         t_plus = torch.clamp(
             t_plus,
-            1, # T_min = 1
-            max = self.num_train_timesteps - 1, # T_max = 999
+            1,  # T_min = 1
+            max=self.num_train_timesteps - 1,  # T_max = 999
         )
         return t_plus
 
-################################################################################################
-# the following is specific to MVDream
+    ################################################################################################
+    # the following is specific to MVDream
     def _mv_get_camera_cond(
         self,
         camera: Float[Tensor, "B 4 4"],
@@ -247,13 +236,11 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         imgs = imgs * 2.0 - 1.0
 
         if self.cfg.gradient_checkpoint:
-            h = self.mv_model.first_stage_model.encoder(imgs, gradient_checkpoint = True)
+            h = self.mv_model.first_stage_model.encoder(imgs, gradient_checkpoint=True)
             moments = self.mv_model.first_stage_model.quant_conv(h)
             posterior = DiagonalGaussianDistribution(moments)
-        
-            latents = self.mv_model.get_first_stage_encoding(
-                posterior
-            )
+
+            latents = self.mv_model.get_first_stage_encoding(posterior)
         else:
             latents = self.mv_model.get_first_stage_encoding(
                 self.mv_model.encode_first_stage(imgs)
@@ -261,10 +248,10 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         return latents  # [B
 
     def mv_get_latents(
-        self, 
-        rgb_BCHW: Float[Tensor, "B C H W"], 
+        self,
+        rgb_BCHW: Float[Tensor, "B C H W"],
         rgb_BCHW_2nd: Optional[Float[Tensor, "B C H W"]] = None,
-        rgb_as_latents=False
+        rgb_as_latents=False,
     ) -> Float[Tensor, "B 4 32 32"]:
         if rgb_as_latents:
             size = self.cfg.mv_image_size // 8
@@ -274,7 +261,10 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             # resize the second latent if it exists
             if rgb_BCHW_2nd is not None:
                 latents_2nd = F.interpolate(
-                    rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
+                    rgb_BCHW_2nd,
+                    size=(size, size),
+                    mode="bilinear",
+                    align_corners=False,
                 )
                 # concatenate the two latents
                 latents = torch.cat([latents, latents_2nd], dim=0)
@@ -286,14 +276,18 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             # resize the second image if it exists
             if rgb_BCHW_2nd is not None:
                 rgb_BCHW_2nd_resize = F.interpolate(
-                    rgb_BCHW_2nd, size=(size, size), mode="bilinear", align_corners=False
+                    rgb_BCHW_2nd,
+                    size=(size, size),
+                    mode="bilinear",
+                    align_corners=False,
                 )
                 # concatenate the two images
-                rgb_BCHW_resize = torch.cat([rgb_BCHW_resize, rgb_BCHW_2nd_resize], dim=0)
+                rgb_BCHW_resize = torch.cat(
+                    [rgb_BCHW_resize, rgb_BCHW_2nd_resize], dim=0
+                )
             # encode image into latents
             latents = self._mv_encode_images(rgb_BCHW_resize)
         return latents
-
 
     def _mv_noise_pred(
         self,
@@ -307,23 +301,31 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         fovy=None,
         is_dual: bool = False,
     ):
-        
         # determine attributes ################################################################################################
         use_t_plus = self.cfg.mv_plus_ratio > 0
 
         # prepare text embeddings ################################################################################################
         text_embeddings = [
-            text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 1st diffusion model's conditional guidance
-            text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1), # for the 1st diffusion model's unconditional guidance
+            text_embeddings_vd
+            if not is_dual
+            else text_embeddings_vd.repeat(
+                2, 1, 1
+            ),  # for the 1st diffusion model's conditional guidance
+            text_embeddings_uncond
+            if not is_dual
+            else text_embeddings_uncond.repeat(
+                2, 1, 1
+            ),  # for the 1st diffusion model's unconditional guidance
         ]
         if use_t_plus:
             text_embeddings += [
-                text_embeddings_vd if not is_dual else text_embeddings_vd.repeat(2, 1, 1), # for the 2nd diffusion model's conditional guidance
+                text_embeddings_vd
+                if not is_dual
+                else text_embeddings_vd.repeat(
+                    2, 1, 1
+                ),  # for the 2nd diffusion model's conditional guidance
             ]
-        text_embeddings = torch.cat(
-            text_embeddings,
-            dim=0
-        )
+        text_embeddings = torch.cat(text_embeddings, dim=0)
 
         # prepare noisy input ################################################################################################
         # random timestamp for the first diffusion model
@@ -331,11 +333,13 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         latents_model_input = [
             latents_noisy,
-        ] * 2 # 2 for the conditional and unconditional guidance for the 1st diffusion model
+        ] * 2  # 2 for the conditional and unconditional guidance for the 1st diffusion model
 
         if use_t_plus:
             # random timestamp for the second diffusion model
-            latents_noisy_second = self.mv_model.q_sample(mv_latents, t_plus, noise=mv_noise)
+            latents_noisy_second = self.mv_model.q_sample(
+                mv_latents, t_plus, noise=mv_noise
+            )
 
             latents_model_input += [
                 latents_noisy_second,
@@ -349,7 +353,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # prepare timestep input ################################################################################################
         t_expand = [
             t,
-        ] * 2 # 2 for the conditional and unconditional guidance for the 1st diffusion model
+        ] * 2  # 2 for the conditional and unconditional guidance for the 1st diffusion model
 
         if use_t_plus:
             t_expand += [
@@ -367,10 +371,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         num_repeat = 3 if use_t_plus else 2
         if is_dual:
             num_repeat *= 2
-        camera = camera.repeat(
-            num_repeat, 
-            1
-        ).to(text_embeddings)
+        camera = camera.repeat(num_repeat, 1).to(text_embeddings)
         context = {
             "context": text_embeddings,
             "camera": camera,
@@ -379,20 +380,20 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # u-net forwasd pass ################################################################################################
         noise_pred = self.mv_model.apply_model(
-            latents_model_input, 
+            latents_model_input,
             t_expand,
             context,
         )
 
         # split the noise_pred ################################################################################################
         if use_t_plus:
-            noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(
-                3
-            )
+            (
+                noise_pred_text,
+                noise_pred_uncond,
+                noise_pred_text_second,
+            ) = noise_pred.chunk(3)
         else:
-            noise_pred_text, noise_pred_uncond = noise_pred.chunk(
-                2
-            )
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
             noise_pred_text_second = noise_pred_text
 
         return noise_pred_text, noise_pred_uncond, noise_pred_text_second
@@ -411,7 +412,6 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         timestep_range: Optional[Tuple[int, int]] = None,
         **kwargs,
     ):
-
         camera = c2w
 
         # determine if dual rendering is enabled
@@ -438,9 +438,14 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         mv_noise = torch.randn_like(mv_latents)
 
         # prepare text embeddings
-        _, text_embeddings = prompt_utils.get_text_embeddings() # mvdream uses the second text embeddings
+        (
+            _,
+            text_embeddings,
+        ) = (
+            prompt_utils.get_text_embeddings()
+        )  # mvdream uses the second text embeddings
         text_batch_size = text_embeddings.shape[0] // 2
-        
+
         # repeat the text embeddings w.r.t. the number of views
         """
             assume n_view = 4
@@ -459,12 +464,12 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             ]
             do so for text_embeddings_vd and text_embeddings_uncond
         """
-        text_embeddings_vd     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-            view_batch_size // text_batch_size, dim = 0
-        )
-        text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
-            view_batch_size // text_batch_size, dim = 0
-        )
+        text_embeddings_vd = text_embeddings[
+            0 * text_batch_size : 1 * text_batch_size
+        ].repeat_interleave(view_batch_size // text_batch_size, dim=0)
+        text_embeddings_uncond = text_embeddings[
+            1 * text_batch_size : 2 * text_batch_size
+        ].repeat_interleave(view_batch_size // text_batch_size, dim=0)
 
         """
             assume n_view = 4
@@ -475,7 +480,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 promt_2, view_1,
                 ...
                 promt_2, view_4,
-            ] 
+            ]
             ->
             [
                 render_1st, promt_1, view_1,
@@ -497,7 +502,6 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
-
             min_t, max_t = self.adapt_timestep_range(timestep_range)
             _t = torch.randint(
                 min_t,
@@ -514,8 +518,12 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             t_plus = _t_plus.repeat_interleave(self.cfg.mv_n_view)
 
             # perform noise prediction
-            noise_pred_text, noise_pred_uncond, noise_pred_text_second = self._mv_noise_pred(
-                mv_latents, 
+            (
+                noise_pred_text,
+                noise_pred_uncond,
+                noise_pred_text_second,
+            ) = self._mv_noise_pred(
+                mv_latents,
                 mv_noise,
                 t,
                 t_plus,
@@ -557,14 +565,28 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         target = (mv_latents - grad).detach()
 
         if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(mv_latents, target, reduction="sum") / view_batch_size 
+            loss_asd = (
+                0.5 * F.mse_loss(mv_latents, target, reduction="sum") / view_batch_size
+            )
             return loss_asd, grad.norm()
         else:
             # split the loss and grad_norm for the 1st and 2nd renderings
             loss_asd = torch.stack(
                 [
-                    0.5 * F.mse_loss(mv_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
-                    0.5 * F.mse_loss(mv_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
+                    0.5
+                    * F.mse_loss(
+                        mv_latents[:view_batch_size],
+                        target[:view_batch_size],
+                        reduction="sum",
+                    )
+                    / view_batch_size,
+                    0.5
+                    * F.mse_loss(
+                        mv_latents[view_batch_size:],
+                        target[view_batch_size:],
+                        reduction="sum",
+                    )
+                    / view_batch_size,
                 ]
             )
             grad_norm = torch.stack(
@@ -593,7 +615,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             if rgb_2nd is not None:
                 rgb_2nd_var = Variable(rgb_2nd, requires_grad=True)
                 loss_asd, norm_asd = self._mv_grad_asd(
-                    rgb_var, # change to rgb_var
+                    rgb_var,  # change to rgb_var
                     prompt_utils,
                     elevation,
                     azimuth,
@@ -601,21 +623,23 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                     c2w,
                     rgb_as_latents=rgb_as_latents,
                     fovy=fovy,
-                    rgb_2nd=rgb_2nd_var, # change to rgb_2nd_var
+                    rgb_2nd=rgb_2nd_var,  # change to rgb_2nd_var
                     **kwargs,
                 )
-                grad_rgb, grad_rgb_2nd = torch_grad(loss_asd.sum(), ([rgb_var, rgb_2nd_var]))
+                grad_rgb, grad_rgb_2nd = torch_grad(
+                    loss_asd.sum(), ([rgb_var, rgb_2nd_var])
+                )
                 loss_asd = torch.cat(
                     [
-                        SpecifyGradient.apply(rgb, grad_rgb), 
-                        SpecifyGradient.apply(rgb_2nd, grad_rgb_2nd)
+                        SpecifyGradient.apply(rgb, grad_rgb),
+                        SpecifyGradient.apply(rgb_2nd, grad_rgb_2nd),
                     ],
-                    dim=0
+                    dim=0,
                 )
                 return loss_asd, norm_asd
             else:
                 loss_asd, norm_asd = self._mv_grad_asd(
-                    rgb_var, # change to rgb_var
+                    rgb_var,  # change to rgb_var
                     prompt_utils,
                     elevation,
                     azimuth,
@@ -643,8 +667,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 **kwargs,
             )
 
-
-################################################################################################
+    ################################################################################################
     def _rd_get_camera_cond(
         self,
         camera: Float[Tensor, "B 4 4"],
@@ -667,15 +690,12 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         return camera
 
     def rd_get_latents(
-        self, 
-        geo_BCHW: Float[Tensor, "B C H W"], 
+        self,
+        geo_BCHW: Float[Tensor, "B C H W"],
         geo_BCHW_2nd: Optional[Float[Tensor, "B C H W"]] = None,
     ) -> Float[Tensor, "B 4 64 64"]:
-
         size = self.cfg.rd_image_size
-        geo_BCHW_resize = F.adaptive_avg_pool2d(
-            geo_BCHW, output_size=(size, size)
-        )
+        geo_BCHW_resize = F.adaptive_avg_pool2d(geo_BCHW, output_size=(size, size))
         # resize the second image if it exists
         if geo_BCHW_2nd is not None:
             geo_BCHW_2nd_resize = F.adaptive_avg_pool2d(
@@ -684,7 +704,6 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             # concatenate the two images
             geo_BCHW_resize = torch.cat([geo_BCHW_resize, geo_BCHW_2nd_resize], dim=0)
         return geo_BCHW_resize
-
 
     def _rd_noise_pred(
         self,
@@ -700,24 +719,33 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         is_dual: bool = False,
     ):
         """
-            Wrapper for the noise prediction of the RichDreamer model
+        Wrapper for the noise prediction of the RichDreamer model
         """
         # determine attributes ################################################################################################
         use_t_plus = self.cfg.rd_plus_ratio > 0
 
         # prepare text embeddings ################################################################################################
         text_embeddings = [
-            text_embeddings_cond if not is_dual else text_embeddings_cond.repeat(2, 1, 1), # for the 1st diffusion model's conditional guidance
-            text_embeddings_uncond if not is_dual else text_embeddings_uncond.repeat(2, 1, 1), # for the 1st diffusion model's unconditional guidance
+            text_embeddings_cond
+            if not is_dual
+            else text_embeddings_cond.repeat(
+                2, 1, 1
+            ),  # for the 1st diffusion model's conditional guidance
+            text_embeddings_uncond
+            if not is_dual
+            else text_embeddings_uncond.repeat(
+                2, 1, 1
+            ),  # for the 1st diffusion model's unconditional guidance
         ]
         if use_t_plus:
             text_embeddings += [
-                text_embeddings_cond if not is_dual else text_embeddings_cond.repeat(2, 1, 1), # for the 2nd diffusion model's conditional guidance
+                text_embeddings_cond
+                if not is_dual
+                else text_embeddings_cond.repeat(
+                    2, 1, 1
+                ),  # for the 2nd diffusion model's conditional guidance
             ]
-        text_embeddings = torch.cat(
-            text_embeddings,
-            dim=0
-        )
+        text_embeddings = torch.cat(text_embeddings, dim=0)
 
         # prepare noisy input ################################################################################################
         # random timestamp for the first diffusion model
@@ -729,7 +757,9 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         if use_t_plus:
             # random timestamp for the second diffusion model
-            latents_noisy_second = self.rd_model.q_sample(rd_latents, t_plus, noise=rd_noise)
+            latents_noisy_second = self.rd_model.q_sample(
+                rd_latents, t_plus, noise=rd_noise
+            )
 
             latents_model_input += [
                 latents_noisy_second,
@@ -743,7 +773,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # prepare timestep input ################################################################################################
         t_expand = [
             t,
-        ] * 2 # 2 for the conditional and unconditional guidance for the 1st diffusion model
+        ] * 2  # 2 for the conditional and unconditional guidance for the 1st diffusion model
 
         if use_t_plus:
             t_expand += [
@@ -760,10 +790,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         num_repeat = 3 if use_t_plus else 2
         if is_dual:
             num_repeat *= 2
-        camera = camera.repeat(
-            num_repeat, 
-            1
-        ).to(text_embeddings)
+        camera = camera.repeat(num_repeat, 1).to(text_embeddings)
         context = {
             "context": text_embeddings,
             "camera": camera,
@@ -772,24 +799,23 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
 
         # u-net forwasd pass ################################################################################################
         noise_pred = self.rd_model.apply_model(
-            latents_model_input, 
+            latents_model_input,
             t_expand,
             context,
         )
 
         # split the noise_pred ################################################################################################
         if use_t_plus:
-            noise_pred_text, noise_pred_uncond, noise_pred_text_second = noise_pred.chunk(
-                3
-            )
+            (
+                noise_pred_text,
+                noise_pred_uncond,
+                noise_pred_text_second,
+            ) = noise_pred.chunk(3)
         else:
-            noise_pred_text, noise_pred_uncond = noise_pred.chunk(
-                2
-            )
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
             noise_pred_text_second = noise_pred_text
 
         return noise_pred_text, noise_pred_uncond, noise_pred_text_second
-
 
     def _rd_grad_asd(
         self,
@@ -809,8 +835,6 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         timestep_range: Optional[Tuple[int, int]] = None,
         **kwargs,
     ):
-
-
         camera = c2w
 
         # determine if dual rendering is enabled
@@ -825,26 +849,33 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         if is_dual:
             img_batch_size *= 2
             # rgb_2nd_BCHW = rgb_2nd.permute(0, 3, 1, 2)
-            geo_2nd_BCHW = torch.cat([normal_2nd, depth_2nd], dim=-1).permute(0, 3, 1, 2)
+            geo_2nd_BCHW = torch.cat([normal_2nd, depth_2nd], dim=-1).permute(
+                0, 3, 1, 2
+            )
 
         rd_latents = self.rd_get_latents(
             geo_BCHW,
             geo_BCHW_2nd=geo_2nd_BCHW if is_dual else None,
-        )        
+        )
 
         # prepare noisy input
         rd_noise = torch.randn_like(rd_latents)
 
         # prepare text embeddings
-        text_embeddings, _ = prompt_utils.get_text_embeddings() # rdreamer uses the first text embeddings
+        (
+            text_embeddings,
+            _,
+        ) = (
+            prompt_utils.get_text_embeddings()
+        )  # rdreamer uses the first text embeddings
         text_batch_size = text_embeddings.shape[0] // 2
         # same as _mv_grad_asd
-        text_embeddings_cond     = text_embeddings[0 * text_batch_size: 1 * text_batch_size].repeat_interleave(
-            view_batch_size // text_batch_size, dim = 0
-        )
-        text_embeddings_uncond = text_embeddings[1 * text_batch_size: 2 * text_batch_size].repeat_interleave(
-            view_batch_size // text_batch_size, dim = 0
-        )
+        text_embeddings_cond = text_embeddings[
+            0 * text_batch_size : 1 * text_batch_size
+        ].repeat_interleave(view_batch_size // text_batch_size, dim=0)
+        text_embeddings_uncond = text_embeddings[
+            1 * text_batch_size : 2 * text_batch_size
+        ].repeat_interleave(view_batch_size // text_batch_size, dim=0)
 
         assert self.min_step is not None and self.max_step is not None
         with torch.no_grad():
@@ -864,7 +895,11 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             t_plus = _t_plus.repeat_interleave(self.cfg.rd_n_view)
 
             # perform noise prediction
-            noise_pred_text, noise_pred_uncond, noise_pred_text_second = self._rd_noise_pred(
+            (
+                noise_pred_text,
+                noise_pred_uncond,
+                noise_pred_text_second,
+            ) = self._rd_noise_pred(
                 rd_latents,
                 rd_noise,
                 t,
@@ -876,7 +911,6 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 fovy=fovy,
                 is_dual=is_dual,
             )
-
 
         # determine the weight
         if self.cfg.rd_weighting_strategy == "sds":
@@ -908,14 +942,28 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
         target = (rd_latents - grad).detach()
         if not is_dual:
-            loss_asd = 0.5 * F.mse_loss(rd_latents, target, reduction="sum") / view_batch_size
+            loss_asd = (
+                0.5 * F.mse_loss(rd_latents, target, reduction="sum") / view_batch_size
+            )
             return loss_asd, grad.norm()
         else:
             # split the grad into two parts
             loss_asd = torch.stack(
                 [
-                    0.5 * F.mse_loss(rd_latents[:view_batch_size], target[:view_batch_size], reduction="sum") / view_batch_size,
-                    0.5 * F.mse_loss(rd_latents[view_batch_size:], target[view_batch_size:], reduction="sum") / view_batch_size,
+                    0.5
+                    * F.mse_loss(
+                        rd_latents[:view_batch_size],
+                        target[:view_batch_size],
+                        reduction="sum",
+                    )
+                    / view_batch_size,
+                    0.5
+                    * F.mse_loss(
+                        rd_latents[view_batch_size:],
+                        target[view_batch_size:],
+                        reduction="sum",
+                    )
+                    / view_batch_size,
                 ]
             )
             grad_norm = torch.stack(
@@ -952,7 +1000,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 normal_2nd_var = Variable(normal_2nd, requires_grad=True)
                 depth_2nd_var = Variable(depth_2nd, requires_grad=True)
                 loss_asd, norm_asd = self._rd_grad_asd(
-                    rgb_var, # change to rgb_var
+                    rgb_var,  # change to rgb_var
                     normal_var,
                     depth_var,
                     prompt_utils,
@@ -962,22 +1010,38 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                     c2w,
                     rgb_as_latents=rgb_as_latents,
                     fovy=fovy,
-                    rgb_2nd=rgb_2nd_var, # change to rgb_2nd_var
+                    rgb_2nd=rgb_2nd_var,  # change to rgb_2nd_var
                     normal_2nd=normal_2nd_var,
                     depth_2nd=depth_2nd_var,
                     **kwargs,
                 )
-                grad_rgb, grad_rgb_2nd, grad_normal, grad_normal_2nd, grad_depth, grad_depth_2nd = torch_grad(
+                (
+                    grad_rgb,
+                    grad_rgb_2nd,
+                    grad_normal,
+                    grad_normal_2nd,
+                    grad_depth,
+                    grad_depth_2nd,
+                ) = torch_grad(
                     loss_asd.sum(),
-                    (rgb_var, rgb_2nd_var, normal_var, normal_2nd_var, depth_var, depth_2nd_var),
+                    (
+                        rgb_var,
+                        rgb_2nd_var,
+                        normal_var,
+                        normal_2nd_var,
+                        depth_var,
+                        depth_2nd_var,
+                    ),
                     allow_unused=True,
-                )                    
+                )
                 loss_asd = torch.cat(
                     [
-                        SpecifyGradient.apply(normal, grad_normal) + SpecifyGradient.apply(depth, grad_depth),
-                        SpecifyGradient.apply(normal_2nd, grad_normal_2nd) + SpecifyGradient.apply(depth_2nd, grad_depth_2nd),
+                        SpecifyGradient.apply(normal, grad_normal)
+                        + SpecifyGradient.apply(depth, grad_depth),
+                        SpecifyGradient.apply(normal_2nd, grad_normal_2nd)
+                        + SpecifyGradient.apply(depth_2nd, grad_depth_2nd),
                     ],
-                    dim=0
+                    dim=0,
                 )
                 if grad_rgb is not None and grad_rgb_2nd is not None:
                     loss_asd = loss_asd + torch.cat(
@@ -985,12 +1049,12 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                             SpecifyGradient.apply(rgb, grad_rgb),
                             SpecifyGradient.apply(rgb_2nd, grad_rgb_2nd),
                         ],
-                        dim=0
+                        dim=0,
                     )
                 return loss_asd, norm_asd
             else:
                 loss_asd, norm_asd = self._rd_grad_asd(
-                    rgb_var, # change to rgb_var
+                    rgb_var,  # change to rgb_var
                     normal_var,
                     depth_var,
                     prompt_utils,
@@ -1008,7 +1072,9 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                     (rgb_var, normal_var, depth_var),
                     allow_unused=True,
                 )
-                loss_asd = SpecifyGradient.apply(normal, grad_normal) + SpecifyGradient.apply(depth, grad_depth)
+                loss_asd = SpecifyGradient.apply(
+                    normal, grad_normal
+                ) + SpecifyGradient.apply(depth, grad_depth)
                 if grad_rgb is not None:
                     loss_asd = loss_asd + SpecifyGradient.apply(rgb, grad_rgb)
                 return loss_asd, norm_asd
@@ -1029,9 +1095,8 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 depth_2nd=depth_2nd,
                 **kwargs,
             )
-        
-################################################################################################
 
+    ################################################################################################
 
     def __call__(
         self,
@@ -1051,24 +1116,23 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         depth_2nd: Optional[Float[Tensor, "B H W C"]] = None,
         **kwargs,
     ):
-
         """
-            # illustration of the concatenated rgb and rgb_2nd, assume n_view = 4
-            # rgb: Float[Tensor, "B H W C"]
-            [
-                render_1st, prompt_1, view_1,
-                ...
-                render_1st, prompt_1, view_4,
-                render_1st, prompt_2, view_1,
-                ...
-                render_1st, prompt_2, view_4,
-                render_2nd, prompt_1, view_1,
-                ...
-                render_2nd, prompt_1, view_4,
-                render_2nd, prompt_2, view_1,
-                ...
-                render_2nd, prompt_2, view_4,
-            ]
+        # illustration of the concatenated rgb and rgb_2nd, assume n_view = 4
+        # rgb: Float[Tensor, "B H W C"]
+        [
+            render_1st, prompt_1, view_1,
+            ...
+            render_1st, prompt_1, view_4,
+            render_1st, prompt_2, view_1,
+            ...
+            render_1st, prompt_2, view_4,
+            render_2nd, prompt_1, view_1,
+            ...
+            render_2nd, prompt_1, view_4,
+            render_2nd, prompt_2, view_1,
+            ...
+            render_2nd, prompt_2, view_4,
+        ]
         """
         # determine if dual rendering is enabled
         is_dual = True if rgb_2nd is not None else False
@@ -1090,15 +1154,13 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
         else:
             loss_mv = torch.tensor(
-                0.0 if not is_dual else [0.0, 0.0],
-                device=self.device
+                0.0 if not is_dual else [0.0, 0.0], device=self.device
             )
             grad_mv = torch.tensor(
-                0.0 if not is_dual else [0.0, 0.0],
-                device=self.device
+                0.0 if not is_dual else [0.0, 0.0], device=self.device
             )
-    
-       ################################################################################################
+
+        ################################################################################################
         if self.cfg.cam_method == "rel_x2":
             camera_distances_input = camera_distances_relative * 2
         elif self.cfg.cam_method == "rel":
@@ -1106,10 +1168,8 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
         elif self.cfg.cam_method == "abs":
             camera_distances_input = camera_distances
         else:
-            raise ValueError(
-                f"Unknown camera method: {self.cfg.cam_method}"
-            )
-        
+            raise ValueError(f"Unknown camera method: {self.cfg.cam_method}")
+
         # select only one view for the guidance
         if self.cfg.rd_weight > 0:
             loss_rd, grad_rd = self.rd_grad_asd(
@@ -1119,7 +1179,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
                 prompt_utils,
                 elevation,
                 azimuth,
-                camera_distances_input, # the trick in the original implementation
+                camera_distances_input,  # the trick in the original implementation
                 c2w,
                 rgb_as_latents=rgb_as_latents,
                 fovy=fovy,
@@ -1130,19 +1190,18 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             )
         else:
             loss_rd = torch.tensor(
-                0.0 if not is_dual else [0.0, 0.0],
-                device=self.device
+                0.0 if not is_dual else [0.0, 0.0], device=self.device
             )
             grad_rd = torch.tensor(
-                0.0 if not is_dual else [0.0, 0.0],
-                device=self.device
+                0.0 if not is_dual else [0.0, 0.0], device=self.device
             )
 
         # return the loss and grad_norm
         if not is_dual:
             return {
                 "loss_asd": self.cfg.rd_weight * loss_rd + self.cfg.mv_weight * loss_mv,
-                "grad_norm_asd": self.cfg.rd_weight * grad_rd + self.cfg.mv_weight * grad_mv,
+                "grad_norm_asd": self.cfg.rd_weight * grad_rd
+                + self.cfg.mv_weight * grad_mv,
                 # "min_step": self.min_step,
                 # "max_step": self.max_step,
             }
@@ -1156,7 +1215,7 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             loss += self.cfg.mv_weight * loss_mv[0]
             grad_norm += self.cfg.mv_weight * loss_mv[0]
 
-            guidance_1st =  {
+            guidance_1st = {
                 "loss_asd": loss,
                 "grad_norm_asd": grad_norm,
             }
@@ -1169,14 +1228,12 @@ class RDMVAsynchronousScoreDistillationGuidance(BaseObject):
             grad_norm += self.cfg.rd_weight * grad_rd[1]
             loss += self.cfg.mv_weight * loss_mv[1]
             grad_norm += self.cfg.mv_weight * grad_mv[1]
-                                               
-            guidance_2nd =  {
+
+            guidance_2nd = {
                 "loss_asd": loss,
                 "grad_norm_asd": grad_norm,
-
             }
             return guidance_1st, guidance_2nd
-
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         # clip grad for stable training as demonstrated in

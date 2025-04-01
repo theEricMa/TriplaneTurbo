@@ -1,8 +1,9 @@
 import os
 from dataclasses import dataclass, field
 
-import threestudio
 import torch
+
+import threestudio
 from threestudio.systems.base import BaseLift3DSystem
 from threestudio.utils.misc import cleanup, get_device
 from threestudio.utils.ops import binary_cross_entropy, dot
@@ -30,7 +31,6 @@ class MVDreamSystem(BaseLift3DSystem):
     def on_fit_start(self) -> None:
         super().on_fit_start()
         self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
-
 
     # def on_load_checkpoint(self, checkpoint):
     #     for k in list(checkpoint["state_dict"].keys()):

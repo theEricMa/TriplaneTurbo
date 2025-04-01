@@ -13,11 +13,13 @@ pipeline = DiffusionPipeline.from_pretrained(repo_id, use_safetensors=True)
 pipeline.save_pretrained("./pretrained/sd-turbo")
 
 from diffusers import StableDiffusionPipeline
+
 model_id = "sd-legacy/stable-diffusion-v1-5"
 pipe = StableDiffusionPipeline.from_pretrained(model_id, use_safetensors=True)
 pipe.save_pretrained("./pretrained/stable-diffusion-v1-5")
 
 import os
+
 cmd = "wget https://huggingface.co/MVDream/MVDream/resolve/main/sd-v2.1-base-4view.pt?download=true -O ./pretrained/sd-v2.1-base-4view.pt"
 os.system(cmd)
 

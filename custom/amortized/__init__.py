@@ -12,4 +12,4 @@
 #         "threestudio version must be >= 0.2.0, please update threestudio by pulling the latest version from github"
 #     )
 
-from . import systems, extern, data, models
+from . import data, extern, models, systems

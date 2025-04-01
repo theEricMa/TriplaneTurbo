@@ -1,9 +1,12 @@
+from dataclasses import dataclass
+from typing import Literal, Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from ..utils.general_utils import config_to_primitive
-from dataclasses import dataclass
-from typing import Optional, Literal
+
 
 def get_activation(name):
     if name is None:
@@ -12,7 +15,9 @@ def get_activation(name):
     if name == "none":
         return lambda x: x
     elif name == "sigmoid-mipnerf":
-        return lambda x: torch.sigmoid(x) * (1 + 2*0.001) - 0.001  # Uses sigmoid clamping from MipNeRF
+        return (
+            lambda x: torch.sigmoid(x) * (1 + 2 * 0.001) - 0.001
+        )  # Uses sigmoid clamping from MipNeRF
     else:
         try:
             return getattr(F, name)
@@ -26,10 +31,10 @@ class VanillaMLP(nn.Module):
         # Convert dict to MLPConfig if needed
         if isinstance(config, dict):
             config = MLPConfig(**config)
-            
+
         self.n_neurons = config.n_neurons
         self.n_hidden_layers = config.n_hidden_layers
-        
+
         layers = [
             self.make_linear(dim_in, self.n_neurons, is_first=True, is_last=False),
             self.make_activation(),
@@ -62,6 +67,7 @@ class VanillaMLP(nn.Module):
     def make_activation(self):
         return nn.ReLU(inplace=True)
 
+
 @dataclass
 class MLPConfig:
     otype: str = "VanillaMLP"
@@ -69,6 +75,7 @@ class MLPConfig:
     output_activation: str = "none"
     n_neurons: int = 64
     n_hidden_layers: int = 2
+
 
 def get_mlp(input_dim: int, output_dim: int, config: dict) -> nn.Module:
     """Create MLP network based on config"""

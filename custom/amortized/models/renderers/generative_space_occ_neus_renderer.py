@@ -1,32 +1,40 @@
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
-from tqdm import tqdm
 
 import nerfacc
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from nerfacc import OccGridEstimator
+from tqdm import tqdm
 
 import threestudio
 from threestudio.models.background.base import BaseBackground
 from threestudio.models.geometry.base import BaseImplicitGeometry
 from threestudio.models.materials.base import BaseMaterial
-from threestudio.models.renderers.neus_volume_renderer import NeuSVolumeRenderer
-from threestudio.utils.ops import validate_empty_rays, chunk_batch
-from .utils import chunk_batch as chunk_batch_custom # a different chunk_batch from threestudio.utils.ops
-from threestudio.utils.typing import *
+from threestudio.models.renderers.neus_volume_renderer import (
+    NeuSVolumeRenderer,
+    volsdf_density,
+)
+from threestudio.utils.ops import chunk_batch
 from threestudio.utils.ops import chunk_batch as chunk_batch_original
-
-from threestudio.models.renderers.neus_volume_renderer import volsdf_density
 from threestudio.utils.ops import scale_tensor as scale_tensor
-from copy import deepcopy
+from threestudio.utils.ops import validate_empty_rays
+from threestudio.utils.typing import *
 
-from nerfacc import OccGridEstimator
+from .utils import (
+    chunk_batch as chunk_batch_custom,  # a different chunk_batch from threestudio.utils.ops
+)
+
 
 class LearnedVariance(nn.Module):
     def __init__(self, init_val, requires_grad=True):
         super(LearnedVariance, self).__init__()
-        self.register_parameter("_inv_std", nn.Parameter(torch.tensor(init_val), requires_grad=requires_grad))
+        self.register_parameter(
+            "_inv_std",
+            nn.Parameter(torch.tensor(init_val), requires_grad=requires_grad),
+        )
 
     @property
     def inv_std(self):
@@ -63,7 +71,6 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
         # for chunking in training
         train_chunk_size: int = 0
 
-
     cfg: Config
 
     def configure(
@@ -73,32 +80,47 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
         background: BaseBackground,
     ) -> None:
         super().configure(geometry, material, background)
-        self.variance = LearnedVariance(self.cfg.learned_variance_init, requires_grad=self.cfg.trainable_variance)
+        self.variance = LearnedVariance(
+            self.cfg.learned_variance_init, requires_grad=self.cfg.trainable_variance
+        )
         self.estimator = nerfacc.OccGridEstimator(
-                            roi_aabb=self.geometry.bbox.view(-1), 
-                            resolution=self.cfg.grid_resolution,
-                            levels=1, # for now, we only use one level
-                        )
+            roi_aabb=self.geometry.bbox.view(-1),
+            resolution=self.cfg.grid_resolution,
+            levels=1,  # for now, we only use one level
+        )
         # if the resolution is too high, we need to chunk the training
         self.chunk_training = self.cfg.train_chunk_size > 0
 
         grid_res = self.cfg.grid_resolution
         # grid = self.estimator.grid_coords.reshape(grid_res, grid_res, grid_res, 3)
-        
-        v = torch.zeros([grid_res] * 3, dtype=torch.bool,)
-        v[grid_res // 2:grid_res // 2 + 1, grid_res // 2:grid_res // 2 + 1, grid_res // 2:grid_res // 2 + 1] = True
+
+        v = torch.zeros(
+            [grid_res] * 3,
+            dtype=torch.bool,
+        )
+        v[
+            grid_res // 2 : grid_res // 2 + 1,
+            grid_res // 2 : grid_res // 2 + 1,
+            grid_res // 2 : grid_res // 2 + 1,
+        ] = True
         self.center_indices = torch.nonzero(v.reshape(-1)).to(self.device)
 
-        v = torch.zeros([grid_res] * 3, dtype=torch.bool,)
-        v[:2, :, :] = True; v[-2:, :, :] = True
-        v[:, :2, :] = True; v[:, -2:, :] = True
-        v[:, :, :2] = True; v[:, :, -2:] = True
+        v = torch.zeros(
+            [grid_res] * 3,
+            dtype=torch.bool,
+        )
+        v[:2, :, :] = True
+        v[-2:, :, :] = True
+        v[:, :2, :] = True
+        v[:, -2:, :] = True
+        v[:, :, :2] = True
+        v[:, :, -2:] = True
         self.border_indices = torch.nonzero(v.reshape(-1)).to(self.device)
 
     def occ_eval_fn(
-            self,
-            sdf, # sdf is a tensor of any shape
-        ):
+        self,
+        sdf,  # sdf is a tensor of any shape
+    ):
         inv_std = self.variance(sdf)
         if self.cfg.use_volsdf:
             alpha = self.render_step_size * volsdf_density(sdf, inv_std)
@@ -111,7 +133,7 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
             c = prev_cdf
             alpha = ((p + 1e-5) / (c + 1e-5)).clip(0.0, 1.0)
         return alpha
-        
+
     def forward(
         self,
         rays_o: Float[Tensor, "B H W 3"],
@@ -126,30 +148,31 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
         **kwargs
     ) -> Dict[str, Float[Tensor, "..."]]:
         batch_size, height, width = rays_o.shape[:3]
-        batch_size_space_cache = text_embed.shape[0] if text_embed is not None else batch_size
+        batch_size_space_cache = (
+            text_embed.shape[0] if text_embed is not None else batch_size
+        )
         num_views_per_batch = batch_size // batch_size_space_cache
 
         if space_cache is None:
             space_cache = self.geometry.generate_space_cache(
-                styles = noise,
-                text_embed = text_embed,
+                styles=noise,
+                text_embed=text_embed,
             )
-        
+
         points = scale_tensor(
-                self.estimator.grid_coords / (self.estimator.resolution -1),
-                [0, 1],
-                [-1,1]
-            )
-        
+            self.estimator.grid_coords / (self.estimator.resolution - 1),
+            [0, 1],
+            [-1, 1],
+        )
+
         with torch.no_grad():
             sdf_batch, _ = self.geometry.forward_field(
-                points[None, ...].expand(batch_size_space_cache, -1, -1),
-                space_cache
+                points[None, ...].expand(batch_size_space_cache, -1, -1), space_cache
             )
 
         out_list = []
         for idx in range(batch_size_space_cache):
-            # prune the grid 
+            # prune the grid
             estimator = deepcopy(self.estimator)
             sdf = sdf_batch[idx]
 
@@ -161,48 +184,48 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
                 update_sdf = torch.zeros_like(sdf)
                 max_sdf = sdf.max()
                 min_sdf = sdf.min()
-                update_sdf[self.center_indices] += (-1 - max_sdf) # smaller than zero
-                update_sdf[self.border_indices] += (1 - min_sdf) # larger than zero
+                update_sdf[self.center_indices] += -1 - max_sdf  # smaller than zero
+                update_sdf[self.border_indices] += 1 - min_sdf  # larger than zero
                 new_sdf = sdf + update_sdf
                 update_mask = (new_sdf == 0).float()
                 sdf = new_sdf * (1 - update_mask) + sdf * update_mask
 
             estimator.occs = self.occ_eval_fn(sdf).view(-1)
             estimator.binaries = (
-                    estimator.occs > torch.clamp(
-                        estimator.occs.mean(), 
-                        max = self.cfg.occ_thres
-                    )
-                ).view(estimator.binaries.shape)
+                estimator.occs
+                > torch.clamp(estimator.occs.mean(), max=self.cfg.occ_thres)
+            ).view(estimator.binaries.shape)
             # self.estimator.occs.fill_(True)
             # self.estimator.binaries.fill_(True)
 
             out = self._forward(
                 rays_o=rays_o[
-                        idx*num_views_per_batch:(idx+1)*num_views_per_batch
-                    ],
+                    idx * num_views_per_batch : (idx + 1) * num_views_per_batch
+                ],
                 rays_d=rays_d[
-                        idx*num_views_per_batch:(idx+1)*num_views_per_batch
-                    ],
+                    idx * num_views_per_batch : (idx + 1) * num_views_per_batch
+                ],
                 light_positions=light_positions[
-                        idx*num_views_per_batch:(idx+1)*num_views_per_batch
-                    ],
+                    idx * num_views_per_batch : (idx + 1) * num_views_per_batch
+                ],
                 bg_color=bg_color[
-                        idx*num_views_per_batch:(idx+1)*num_views_per_batch
-                    ] if bg_color is not None else None,
-                space_cache=space_cache[
-                        idx:idx+1
-                    ], # as the space_cache is tensor,
-                text_embed=text_embed[
-                        idx:idx+1
-                    ] if text_embed is not None else None,
+                    idx * num_views_per_batch : (idx + 1) * num_views_per_batch
+                ]
+                if bg_color is not None
+                else None,
+                space_cache=space_cache[idx : idx + 1],  # as the space_cache is tensor,
+                text_embed=text_embed[idx : idx + 1]
+                if text_embed is not None
+                else None,
                 estimator=estimator,
                 camera_distances=camera_distances[
-                        idx*num_views_per_batch:(idx+1)*num_views_per_batch
-                    ] if camera_distances is not None else None,
-                c2w=c2w[
-                        idx*num_views_per_batch:(idx+1)*num_views_per_batch
-                    ] if c2w is not None else None,
+                    idx * num_views_per_batch : (idx + 1) * num_views_per_batch
+                ]
+                if camera_distances is not None
+                else None,
+                c2w=c2w[idx * num_views_per_batch : (idx + 1) * num_views_per_batch]
+                if c2w is not None
+                else None,
                 **kwargs
             )
             out_list.append(out)
@@ -210,14 +233,12 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
         # stack the outputs
         out_dict = {}
         for key in out_list[0].keys():
-            if key not in ["mesh", "sdf_grad", "sdf"]: # hard coded for special case
+            if key not in ["mesh", "sdf_grad", "sdf"]:  # hard coded for special case
                 out_dict[key] = torch.concat([o[key] for o in out_list], dim=0)
             else:
                 out_dict[key] = [o[key] for o in out_list]
         out_dict.update({"inv_std": self.variance.inv_std})
         return out_dict
-
-            
 
     def _forward(
         self,
@@ -243,7 +264,7 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
             .reshape(-1, 3)
         )
         n_rays = rays_o_flatten.shape[0]
-        
+
         # def alpha_fn(
         #     t_starts: Float[Tensor, "Nr Ns"],
         #     t_ends: Float[Tensor, "Nr Ns"],
@@ -276,19 +297,19 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
 
         #     alpha = self.occ_eval_fn(sdf)
         #     return alpha
-             
+
         ray_indices, t_starts_, t_ends_ = estimator.sampling(
             rays_o_flatten,
             rays_d_flatten,
-            alpha_fn=None, #alpha_fn if self.cfg.prune_alpha_threshold else None,
+            alpha_fn=None,  # alpha_fn if self.cfg.prune_alpha_threshold else None,
             near_plane=self.cfg.near_plane,
             far_plane=self.cfg.far_plane,
             render_step_size=self.render_step_size,
-            alpha_thre=0, #self.cfg.occ_thres if self.cfg.prune_alpha_threshold else 0.0,
+            alpha_thre=0,  # self.cfg.occ_thres if self.cfg.prune_alpha_threshold else 0.0,
             stratified=self.randomized,
             cone_angle=0.0,
         )
-        
+
         # the following are from NeuS #########
         ray_indices, t_starts_, t_ends_ = validate_empty_rays(
             ray_indices, t_starts_, t_ends_
@@ -317,10 +338,15 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
             )
 
             # background
-            if hasattr(self.background, "enabling_hypernet") and self.background.enabling_hypernet:
+            if (
+                hasattr(self.background, "enabling_hypernet")
+                and self.background.enabling_hypernet
+            ):
                 comp_rgb_bg = self.background(
-                    dirs=rays_d, 
-                    text_embed=text_embed if "text_embed_bg" not in kwargs else kwargs["text_embed_bg"]
+                    dirs=rays_d,
+                    text_embed=text_embed
+                    if "text_embed_bg" not in kwargs
+                    else kwargs["text_embed_bg"],
                 )
             else:
                 comp_rgb_bg = self.background(dirs=rays_d)
@@ -330,13 +356,15 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
                     self.geometry,
                     space_cache=space_cache,
                 ),
-                self.cfg.train_chunk_size if self.training else self.cfg.eval_chunk_size,
+                self.cfg.train_chunk_size
+                if self.training
+                else self.cfg.eval_chunk_size,
                 positions[None, ...],
                 output_normal=True,
             )
             rgb_fg_all = chunk_batch(
                 self.material,
-                self.cfg.eval_chunk_size, # since we donnot change the module here, we can use eval_chunk_size
+                self.cfg.eval_chunk_size,  # since we donnot change the module here, we can use eval_chunk_size
                 viewdirs=t_dirs,
                 positions=positions,
                 light_positions=t_light_positions,
@@ -344,18 +372,23 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
             )
 
             # background
-            if hasattr(self.background, "enabling_hypernet") and self.background.enabling_hypernet:
+            if (
+                hasattr(self.background, "enabling_hypernet")
+                and self.background.enabling_hypernet
+            ):
                 comp_rgb_bg = chunk_batch(
-                    self.background, 
-                    self.cfg.eval_chunk_size, # since we donnot change the module here, we can use eval_chunk_size
+                    self.background,
+                    self.cfg.eval_chunk_size,  # since we donnot change the module here, we can use eval_chunk_size
                     dirs=rays_d,
-                    text_embed=text_embed if "text_embed_bg" not in kwargs else kwargs["text_embed_bg"]
+                    text_embed=text_embed
+                    if "text_embed_bg" not in kwargs
+                    else kwargs["text_embed_bg"],
                 )
             else:
                 comp_rgb_bg = chunk_batch(
-                    self.background, 
-                    self.cfg.eval_chunk_size, # since we donnot change the module here, we can use eval_chunk_size
-                    dirs=rays_d
+                    self.background,
+                    self.cfg.eval_chunk_size,  # since we donnot change the module here, we can use eval_chunk_size
+                    dirs=rays_d,
                 )
 
         # grad or normal?
@@ -397,7 +430,6 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
 
         comp_rgb = comp_rgb_fg + bg_color * (1.0 - opacity)
 
-
         out = {
             "comp_rgb": comp_rgb.view(batch_size, height, width, -1),
             "comp_rgb_fg": comp_rgb_fg.view(batch_size, height, width, -1),
@@ -409,8 +441,12 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
 
         # the following are from richdreamer #########
 
-        far= camera_distances.reshape(-1, 1, 1, 1) + torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
-        near = camera_distances.reshape(-1, 1, 1, 1) - torch.sqrt(3 * torch.ones(1, 1, 1, 1, device=camera_distances.device))
+        far = camera_distances.reshape(-1, 1, 1, 1) + torch.sqrt(
+            3 * torch.ones(1, 1, 1, 1, device=camera_distances.device)
+        )
+        near = camera_distances.reshape(-1, 1, 1, 1) - torch.sqrt(
+            3 * torch.ones(1, 1, 1, 1, device=camera_distances.device)
+        )
         disparity_tmp = out["depth"] * out["opacity"] + (1.0 - out["opacity"]) * far
         disparity_norm = (far - disparity_tmp) / (far - near)
         disparity_norm = torch.clamp(disparity_norm, 0.0, 1.0)
@@ -438,7 +474,7 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
 
             # for compatibility with RichDreamer #############
             bg_normal = 0.5 * torch.ones_like(comp_normal)
-            bg_normal[:, 2] = 1.0 # for a blue background
+            bg_normal[:, 2] = 1.0  # for a blue background
             bg_normal_white = torch.ones_like(comp_normal)
 
             # comp_normal_vis = (comp_normal + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
@@ -446,19 +482,29 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
             w2c: Float[Tensor, "B 4 4"] = torch.inverse(c2w)
             rot: Float[Tensor, "B 3 3"] = w2c[:, :3, :3]
             comp_normal_cam = comp_normal.view(batch_size, -1, 3) @ rot.permute(0, 2, 1)
-            flip_x = torch.eye(3, device=comp_normal_cam.device) #  pixel space flip axis so we need built negative y-axis normal
+            flip_x = torch.eye(
+                3, device=comp_normal_cam.device
+            )  #  pixel space flip axis so we need built negative y-axis normal
             flip_x[0, 0] = -1
             comp_normal_cam = comp_normal_cam @ flip_x[None, :, :]
-            comp_normal_cam = comp_normal_cam.view(-1, 3) # reshape back to (Nr, 3)
-            comp_normal_cam_vis = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal
-            comp_normal_cam_vis_white = (comp_normal_cam + 1.0) / 2.0 * opacity + (1 - opacity) * bg_normal_white
+            comp_normal_cam = comp_normal_cam.view(-1, 3)  # reshape back to (Nr, 3)
+            comp_normal_cam_vis = (comp_normal_cam + 1.0) / 2.0 * opacity + (
+                1 - opacity
+            ) * bg_normal
+            comp_normal_cam_vis_white = (comp_normal_cam + 1.0) / 2.0 * opacity + (
+                1 - opacity
+            ) * bg_normal_white
 
             out.update(
                 {
                     "comp_normal": comp_normal_mask.view(batch_size, height, width, 3),
                     # "comp_normal_vis": comp_normal_vis.view(batch_size, height, width, 3),
-                    "comp_normal_cam_vis": comp_normal_cam_vis.view(batch_size, height, width, 3),
-                    "comp_normal_cam_vis_white": comp_normal_cam_vis_white.view(batch_size, height, width, 3),
+                    "comp_normal_cam_vis": comp_normal_cam_vis.view(
+                        batch_size, height, width, 3
+                    ),
+                    "comp_normal_cam_vis_white": comp_normal_cam_vis_white.view(
+                        batch_size, height, width, 3
+                    ),
                 }
             )
 
@@ -476,7 +522,7 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
             )
 
         return out
-    
+
     def update_step(
         self, epoch: int, global_step: int, on_load_weights: bool = False
     ) -> None:
@@ -493,4 +539,3 @@ class GenerativeSpaceOccNeusRenderer(NeuSVolumeRenderer):
         if hasattr(self.geometry, "eval"):
             self.geometry.eval()
         return super().eval()
-    

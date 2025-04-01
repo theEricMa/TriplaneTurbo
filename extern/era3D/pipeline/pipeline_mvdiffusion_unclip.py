@@ -1,24 +1,35 @@
 import inspect
+import os
 import warnings
-from typing import Callable, List, Optional, Union, Dict, Any
+from typing import Any, Callable, Dict, List, Optional, Union
+
 import PIL
 import torch
-from packaging import version
-from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection, CLIPFeatureExtractor, CLIPTokenizer, CLIPTextModel
-from diffusers.utils.import_utils import is_accelerate_available
+import torchvision.transforms.functional as TF
 from diffusers.configuration_utils import FrozenDict
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.models.embeddings import get_timestep_embedding
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.pipelines.stable_diffusion.stable_unclip_image_normalizer import (
+    StableUnCLIPImageNormalizer,
+)
 from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils import deprecate, logging
+from diffusers.utils.import_utils import is_accelerate_available
 from diffusers.utils.torch_utils import randn_tensor
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-from diffusers.pipelines.stable_diffusion.stable_unclip_image_normalizer import StableUnCLIPImageNormalizer
-import os
-import torchvision.transforms.functional as TF
 from einops import rearrange
+from packaging import version
+from transformers import (
+    CLIPFeatureExtractor,
+    CLIPImageProcessor,
+    CLIPTextModel,
+    CLIPTokenizer,
+    CLIPVisionModelWithProjection,
+)
+
 logger = logging.get_logger(__name__)
+
 
 class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
     """
@@ -49,6 +60,7 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         vae ([`AutoencoderKL`]):
             Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
     """
+
     # image encoding components
     feature_extractor: CLIPFeatureExtractor
     image_encoder: CLIPVisionModelWithProjection
@@ -95,6 +107,7 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.num_views: int = num_views
+
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.enable_vae_slicing
     def enable_vae_slicing(self):
         r"""
@@ -198,9 +211,19 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
             # For classifier free guidance, we need to do two forward passes.
             # Here we concatenate the unconditional and text embeddings into a single batch
             # to avoid doing two forward passes
-            normal_prompt_embeds, color_prompt_embeds = torch.chunk(prompt_embeds, 2, dim=0)
-            
-            prompt_embeds = torch.cat([normal_prompt_embeds, normal_prompt_embeds, color_prompt_embeds, color_prompt_embeds], 0)
+            normal_prompt_embeds, color_prompt_embeds = torch.chunk(
+                prompt_embeds, 2, dim=0
+            )
+
+            prompt_embeds = torch.cat(
+                [
+                    normal_prompt_embeds,
+                    normal_prompt_embeds,
+                    color_prompt_embeds,
+                    color_prompt_embeds,
+                ],
+                0,
+            )
 
         return prompt_embeds
 
@@ -210,45 +233,71 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         device,
         num_images_per_prompt,
         do_classifier_free_guidance,
-        noise_level: int=0,
-        generator: Optional[torch.Generator] = None
+        noise_level: int = 0,
+        generator: Optional[torch.Generator] = None,
     ):
         dtype = next(self.image_encoder.parameters()).dtype
-        # ______________________________clip image embedding______________________________ 
-        image = self.feature_extractor(images=image_pil, return_tensors="pt").pixel_values
+        # ______________________________clip image embedding______________________________
+        image = self.feature_extractor(
+            images=image_pil, return_tensors="pt"
+        ).pixel_values
         image = image.to(device=device, dtype=dtype)
         image_embeds = self.image_encoder(image).image_embeds
-        
+
         image_embeds = self.noise_image_embeddings(
             image_embeds=image_embeds,
             noise_level=noise_level,
             generator=generator,
-            )
+        )
         # duplicate image embeddings for each generation per prompt, using mps friendly method
         # image_embeds = image_embeds.unsqueeze(1)
         # note: the condition input is same
         image_embeds = image_embeds.repeat(num_images_per_prompt, 1)
 
         if do_classifier_free_guidance:
-            normal_image_embeds, color_image_embeds = torch.chunk(image_embeds, 2, dim=0)
+            normal_image_embeds, color_image_embeds = torch.chunk(
+                image_embeds, 2, dim=0
+            )
             negative_prompt_embeds = torch.zeros_like(normal_image_embeds)
 
             # For classifier free guidance, we need to do two forward passes.
             # Here we concatenate the unconditional and text embeddings into a single batch
             # to avoid doing two forward passes
-            image_embeds = torch.cat([negative_prompt_embeds, normal_image_embeds, negative_prompt_embeds, color_image_embeds], 0)
-            
+            image_embeds = torch.cat(
+                [
+                    negative_prompt_embeds,
+                    normal_image_embeds,
+                    negative_prompt_embeds,
+                    color_image_embeds,
+                ],
+                0,
+            )
+
         # _____________________________vae input latents__________________________________________________
-        image_pt = torch.stack([TF.to_tensor(img) for img in image_pil], dim=0).to(dtype=self.vae.dtype, device=device)
+        image_pt = torch.stack([TF.to_tensor(img) for img in image_pil], dim=0).to(
+            dtype=self.vae.dtype, device=device
+        )
         image_pt = image_pt * 2.0 - 1.0
-        image_latents = self.vae.encode(image_pt).latent_dist.mode() * self.vae.config.scaling_factor
-        # Note: repeat differently from official pipelines     
+        image_latents = (
+            self.vae.encode(image_pt).latent_dist.mode()
+            * self.vae.config.scaling_factor
+        )
+        # Note: repeat differently from official pipelines
         image_latents = image_latents.repeat(num_images_per_prompt, 1, 1, 1)
 
         if do_classifier_free_guidance:
-            normal_image_latents, color_image_latents = torch.chunk(image_latents, 2, dim=0)
-            image_latents = torch.cat([torch.zeros_like(normal_image_latents), normal_image_latents, 
-                                       torch.zeros_like(color_image_latents), color_image_latents], 0)
+            normal_image_latents, color_image_latents = torch.chunk(
+                image_latents, 2, dim=0
+            )
+            image_latents = torch.cat(
+                [
+                    torch.zeros_like(normal_image_latents),
+                    normal_image_latents,
+                    torch.zeros_like(color_image_latents),
+                    color_image_latents,
+                ],
+                0,
+            )
 
         return image_embeds, image_latents
 
@@ -268,13 +317,17 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         # eta corresponds to η in DDIM paper: https://arxiv.org/abs/2010.02502
         # and should be between [0, 1]
 
-        accepts_eta = "eta" in set(inspect.signature(self.scheduler.step).parameters.keys())
+        accepts_eta = "eta" in set(
+            inspect.signature(self.scheduler.step).parameters.keys()
+        )
         extra_step_kwargs = {}
         if accepts_eta:
             extra_step_kwargs["eta"] = eta
 
         # check if the scheduler accepts generator
-        accepts_generator = "generator" in set(inspect.signature(self.scheduler.step).parameters.keys())
+        accepts_generator = "generator" in set(
+            inspect.signature(self.scheduler.step).parameters.keys()
+        )
         if accepts_generator:
             extra_step_kwargs["generator"] = generator
         return extra_step_kwargs
@@ -289,28 +342,52 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         noise_level,
     ):
         if height % 8 != 0 or width % 8 != 0:
-            raise ValueError(f"`height` and `width` have to be divisible by 8 but are {height} and {width}.")
+            raise ValueError(
+                f"`height` and `width` have to be divisible by 8 but are {height} and {width}."
+            )
 
         if (callback_steps is None) or (
-            callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0)
+            callback_steps is not None
+            and (not isinstance(callback_steps, int) or callback_steps <= 0)
         ):
             raise ValueError(
                 f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
                 f" {type(callback_steps)}."
             )
 
-        if prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
+        if prompt is not None and (
+            not isinstance(prompt, str) and not isinstance(prompt, list)
+        ):
+            raise ValueError(
+                f"`prompt` has to be of type `str` or `list` but is {type(prompt)}"
+            )
 
-
-        if noise_level < 0 or noise_level >= self.image_noising_scheduler.config.num_train_timesteps:
+        if (
+            noise_level < 0
+            or noise_level >= self.image_noising_scheduler.config.num_train_timesteps
+        ):
             raise ValueError(
                 f"`noise_level` must be between 0 and {self.image_noising_scheduler.config.num_train_timesteps - 1}, inclusive."
             )
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
-    def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, generator, latents=None):
-        shape = (batch_size, num_channels_latents, height // self.vae_scale_factor, width // self.vae_scale_factor)
+    def prepare_latents(
+        self,
+        batch_size,
+        num_channels_latents,
+        height,
+        width,
+        dtype,
+        device,
+        generator,
+        latents=None,
+    ):
+        shape = (
+            batch_size,
+            num_channels_latents,
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
+        )
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
                 f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
@@ -318,7 +395,9 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
             )
 
         if latents is None:
-            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            latents = randn_tensor(
+                shape, generator=generator, device=device, dtype=dtype
+            )
         else:
             latents = latents.to(device)
 
@@ -348,19 +427,29 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         """
         if noise is None:
             noise = randn_tensor(
-                image_embeds.shape, generator=generator, device=image_embeds.device, dtype=image_embeds.dtype
+                image_embeds.shape,
+                generator=generator,
+                device=image_embeds.device,
+                dtype=image_embeds.dtype,
             )
 
-        noise_level = torch.tensor([noise_level] * image_embeds.shape[0], device=image_embeds.device)
+        noise_level = torch.tensor(
+            [noise_level] * image_embeds.shape[0], device=image_embeds.device
+        )
 
         image_embeds = self.image_normalizer.scale(image_embeds)
 
-        image_embeds = self.image_noising_scheduler.add_noise(image_embeds, timesteps=noise_level, noise=noise)
+        image_embeds = self.image_noising_scheduler.add_noise(
+            image_embeds, timesteps=noise_level, noise=noise
+        )
 
         image_embeds = self.image_normalizer.unscale(image_embeds)
 
         noise_level = get_timestep_embedding(
-            timesteps=noise_level, embedding_dim=image_embeds.shape[-1], flip_sin_to_cos=True, downscale_freq_shift=0
+            timesteps=noise_level,
+            embedding_dim=image_embeds.shape[-1],
+            flip_sin_to_cos=True,
+            downscale_freq_shift=0,
         )
 
         # `get_timestep_embeddings` does not contain any weights and will always return f32 tensors,
@@ -377,7 +466,7 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
     def __call__(
         self,
         image: Union[torch.FloatTensor, PIL.Image.Image],
-        prompt: Union[str, List[str]],   
+        prompt: Union[str, List[str]],
         prompt_embeds: torch.FloatTensor = None,
         dino_feature: torch.FloatTensor = None,
         height: Optional[int] = None,
@@ -489,7 +578,7 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
             height=height,
             width=width,
             callback_steps=callback_steps,
-            noise_level=noise_level
+            noise_level=noise_level,
         )
 
         # 2. Define call parameters
@@ -499,8 +588,8 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
             batch_size = image.shape[0]
             assert batch_size >= self.num_views and batch_size % self.num_views == 0
         elif isinstance(image, PIL.Image.Image):
-            image = [image]*self.num_views*2
-            batch_size = self.num_views*2
+            image = [image] * self.num_views * 2
+            batch_size = self.num_views * 2
 
         if isinstance(prompt, str):
             prompt = [prompt] * self.num_views * 2
@@ -514,7 +603,9 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
 
         # 3. Encode input prompt
         text_encoder_lora_scale = (
-            cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
+            cross_attention_kwargs.get("scale", None)
+            if cross_attention_kwargs is not None
+            else None
         )
         prompt_embeds = self._encode_prompt(
             prompt=prompt,
@@ -526,7 +617,6 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
             negative_prompt_embeds=negative_prompt_embeds,
             lora_scale=text_encoder_lora_scale,
         )
-        
 
         # 4. Encoder input image
         if isinstance(image, list):
@@ -570,13 +660,13 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         # 8. Denoising loop
         for i, t in enumerate(self.progress_bar(timesteps)):
             if do_classifier_free_guidance:
-                normal_latents, color_latents = torch.chunk(latents, 2, dim=0)  
-                latent_model_input = torch.cat([normal_latents, normal_latents, color_latents, color_latents], 0)
+                normal_latents, color_latents = torch.chunk(latents, 2, dim=0)
+                latent_model_input = torch.cat(
+                    [normal_latents, normal_latents, color_latents, color_latents], 0
+                )
             else:
                 latent_model_input = latents
-            latent_model_input = torch.cat([
-                    latent_model_input, image_latents
-                ], dim=1)
+            latent_model_input = torch.cat([latent_model_input, image_latents], dim=1)
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
             # predict the noise residual
@@ -587,26 +677,38 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
                 dino_feature=dino_feature,
                 class_labels=image_embeds,
                 cross_attention_kwargs=cross_attention_kwargs,
-                return_dict=False)
-            
+                return_dict=False,
+            )
+
             noise_pred = unet_out[0]
-            if return_elevation_focal:    
-                uncond_pose, pose  = torch.chunk(unet_out[1], 2, 0) 
+            if return_elevation_focal:
+                uncond_pose, pose = torch.chunk(unet_out[1], 2, 0)
                 pose = uncond_pose + guidance_scale * (pose - uncond_pose)
-                ele = pose[:, 0].detach().cpu().numpy() # b
+                ele = pose[:, 0].detach().cpu().numpy()  # b
                 eles.append(ele)
                 focal = pose[:, 1].detach().cpu().numpy()
                 focals.append(focal)
-                
+
             # perform guidance
             if do_classifier_free_guidance:
-                normal_noise_pred_uncond, normal_noise_pred_text, color_noise_pred_uncond, color_noise_pred_text = torch.chunk(noise_pred, 4, dim=0)
-                
-                noise_pred_uncond, noise_pred_text = torch.cat([normal_noise_pred_uncond, color_noise_pred_uncond], 0), torch.cat([normal_noise_pred_text, color_noise_pred_text], 0)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                (
+                    normal_noise_pred_uncond,
+                    normal_noise_pred_text,
+                    color_noise_pred_uncond,
+                    color_noise_pred_text,
+                ) = torch.chunk(noise_pred, 4, dim=0)
+
+                noise_pred_uncond, noise_pred_text = torch.cat(
+                    [normal_noise_pred_uncond, color_noise_pred_uncond], 0
+                ), torch.cat([normal_noise_pred_text, color_noise_pred_text], 0)
+                noise_pred = noise_pred_uncond + guidance_scale * (
+                    noise_pred_text - noise_pred_uncond
+                )
 
             # compute the previous noisy sample x_t -> x_t-1
-            latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+            latents = self.scheduler.step(
+                noise_pred, t, latents, **extra_step_kwargs, return_dict=False
+            )[0]
 
             if callback is not None and i % callback_steps == 0:
                 callback(i, t, latents)
@@ -616,7 +718,9 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
             if num_channels_latents == 8:
                 latents = torch.cat([latents[:, :4], latents[:, 4:]], dim=0)
             with torch.no_grad():
-                image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
+                image = self.vae.decode(
+                    latents / self.vae.config.scaling_factor, return_dict=False
+                )[0]
         else:
             image = latents
 
@@ -626,8 +730,8 @@ class StableUnCLIPImg2ImgPipeline(DiffusionPipeline):
         # if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
         #     self.final_offload_hook.offload()
         if not return_dict:
-            return (image, )
+            return (image,)
         if return_elevation_focal:
-            return ImagePipelineOutput(images=image),  eles, focals
+            return ImagePipelineOutput(images=image), eles, focals
         else:
             return ImagePipelineOutput(images=image)

@@ -1,9 +1,6 @@
 from .triplaneturbo_text_to_3d import (
     TriplaneTurboTextTo3DPipeline,
-    TriplaneTurboTextTo3DPipelineConfig
+    TriplaneTurboTextTo3DPipelineConfig,
 )
 
-__all__ = [
-    "TriplaneTurboTextTo3DPipeline",
-    "TriplaneTurboTextTo3DPipelineConfig"
-]
+__all__ = ["TriplaneTurboTextTo3DPipeline", "TriplaneTurboTextTo3DPipelineConfig"]

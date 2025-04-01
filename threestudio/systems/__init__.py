@@ -1,7 +1,1 @@
-from . import (
-    dreamfusion,
-    fantasia3d,
-    prolificdreamer,
-    mvdream,
-    scaledreamer
-)
+from . import dreamfusion, fantasia3d, mvdream, prolificdreamer, scaledreamer

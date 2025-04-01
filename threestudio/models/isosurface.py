@@ -15,18 +15,18 @@ class IsosurfaceHelper(nn.Module):
     def grid_vertices(self) -> Float[Tensor, "N 3"]:
         raise NotImplementedError
 
+
 # added by Zhiyuan ########################################
 class DiffMarchingCubeHelper(IsosurfaceHelper):
     def __init__(
-            self, 
-            resolution: int, 
-            point_range: Tuple[float, float] = (0, 1)
-        ) -> None:
+        self, resolution: int, point_range: Tuple[float, float] = (0, 1)
+    ) -> None:
         super().__init__()
         self.resolution = resolution
         self.points_range = point_range
 
         from diso import DiffMC
+
         self.mc_func: Callable = DiffMC(dtype=torch.float32)
         self._grid_vertices: Optional[Float[Tensor, "N3 3"]] = None
         self._dummy: Float[Tensor, "..."]
@@ -45,7 +45,10 @@ class DiffMarchingCubeHelper(IsosurfaceHelper):
             )
             x, y, z = torch.meshgrid(x, y, z, indexing="ij")
             verts = torch.stack([x, y, z], dim=-1).reshape(-1, 3)
-            verts = verts * (self.points_range[1] - self.points_range[0]) + self.points_range[0]
+            verts = (
+                verts * (self.points_range[1] - self.points_range[0])
+                + self.points_range[0]
+            )
 
             self._grid_vertices = verts
         return self._grid_vertices
@@ -58,22 +61,24 @@ class DiffMarchingCubeHelper(IsosurfaceHelper):
     ) -> Mesh:
         level = level.view(self.resolution, self.resolution, self.resolution)
         if deformation is not None:
-            deformation = deformation.view(self.resolution, self.resolution, self.resolution, 3)
+            deformation = deformation.view(
+                self.resolution, self.resolution, self.resolution, 3
+            )
         v_pos, t_pos_idx = self.mc_func(level, deformation, isovalue=isovalue)
-        v_pos = v_pos * (self.points_range[1] - self.points_range[0]) + self.points_range[0]
+        v_pos = (
+            v_pos * (self.points_range[1] - self.points_range[0]) + self.points_range[0]
+        )
         # TODO: if the mesh is good
         return Mesh(v_pos=v_pos, t_pos_idx=t_pos_idx)
 
 
-
 ##############################################
+
 
 class MarchingCubeCPUHelper(IsosurfaceHelper):
     def __init__(
-            self, 
-            resolution: int,
-            point_range: Tuple[float, float] = (0, 1)
-        ) -> None:
+        self, resolution: int, point_range: Tuple[float, float] = (0, 1)
+    ) -> None:
         super().__init__()
         self.resolution = resolution
         self.points_range = point_range
@@ -125,11 +130,8 @@ class MarchingCubeCPUHelper(IsosurfaceHelper):
 
 class MarchingTetrahedraHelper(IsosurfaceHelper):
     def __init__(
-            self, 
-            resolution: int, 
-            tets_path: str,
-            point_range: Tuple[float, float] = (0, 1)
-        ):
+        self, resolution: int, tets_path: str, point_range: Tuple[float, float] = (0, 1)
+    ):
         super().__init__()
         self.resolution = resolution
         self.tets_path = tets_path

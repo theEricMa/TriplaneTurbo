@@ -11,28 +11,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import math
+import pdb
+import random
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.models.embeddings import ImagePositionalEmbeddings
-from diffusers.utils import BaseOutput, deprecate
-from diffusers.utils.torch_utils import maybe_allow_in_graph
-from diffusers.models.attention import FeedForward, AdaLayerNorm, AdaLayerNormZero, Attention
-from diffusers.models.embeddings import PatchEmbed
+from diffusers.models.attention import (
+    AdaLayerNorm,
+    AdaLayerNormZero,
+    Attention,
+    FeedForward,
+)
+from diffusers.models.embeddings import ImagePositionalEmbeddings, PatchEmbed
 from diffusers.models.lora import LoRACompatibleConv, LoRACompatibleLinear
 from diffusers.models.modeling_utils import ModelMixin
+from diffusers.utils import BaseOutput, deprecate
 from diffusers.utils.import_utils import is_xformers_available
-
+from diffusers.utils.torch_utils import maybe_allow_in_graph
 from einops import rearrange
-import pdb
-import random
-import math
-
+from torch import nn
 
 if is_xformers_available():
     import xformers
@@ -106,12 +107,12 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
         norm_type: str = "layer_norm",
         norm_elementwise_affine: bool = True,
         num_views: int = 1,
-        cd_attention_mid: bool=False,
-        cd_attention_last: bool=False,
-        multiview_attention: bool=True,
-        sparse_mv_attention: bool = True, # not used
-        mvcd_attention: bool=False,
-        use_dino: bool=False
+        cd_attention_mid: bool = False,
+        cd_attention_last: bool = False,
+        multiview_attention: bool = True,
+        sparse_mv_attention: bool = True,  # not used
+        mvcd_attention: bool = False,
+        use_dino: bool = False,
     ):
         super().__init__()
         self.use_linear_projection = use_linear_projection
@@ -133,7 +134,12 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
                 " results in future versions. If you have downloaded this checkpoint from the Hugging Face Hub, it"
                 " would be very nice if you could open a Pull request for the `transformer/config.json` file"
             )
-            deprecate("norm_type!=num_embeds_ada_norm", "1.0.0", deprecation_message, standard_warn=False)
+            deprecate(
+                "norm_type!=num_embeds_ada_norm",
+                "1.0.0",
+                deprecation_message,
+                standard_warn=False,
+            )
             norm_type = "ada_norm"
 
         if self.is_input_continuous and self.is_input_vectorized:
@@ -146,7 +152,11 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
                 f"Cannot define both `num_vector_embeds`: {num_vector_embeds} and `patch_size`: {patch_size}. Make"
                 " sure that either `num_vector_embeds` or `num_patches` is None."
             )
-        elif not self.is_input_continuous and not self.is_input_vectorized and not self.is_input_patches:
+        elif (
+            not self.is_input_continuous
+            and not self.is_input_vectorized
+            and not self.is_input_patches
+        ):
             raise ValueError(
                 f"Has to define `in_channels`: {in_channels}, `num_vector_embeds`: {num_vector_embeds}, or patch_size:"
                 f" {patch_size}. Make sure that `in_channels`, `num_vector_embeds` or `num_patches` is not None."
@@ -156,14 +166,25 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
         if self.is_input_continuous:
             self.in_channels = in_channels
 
-            self.norm = torch.nn.GroupNorm(num_groups=norm_num_groups, num_channels=in_channels, eps=1e-6, affine=True)
+            self.norm = torch.nn.GroupNorm(
+                num_groups=norm_num_groups,
+                num_channels=in_channels,
+                eps=1e-6,
+                affine=True,
+            )
             if use_linear_projection:
                 self.proj_in = LoRACompatibleLinear(in_channels, inner_dim)
             else:
-                self.proj_in = LoRACompatibleConv(in_channels, inner_dim, kernel_size=1, stride=1, padding=0)
+                self.proj_in = LoRACompatibleConv(
+                    in_channels, inner_dim, kernel_size=1, stride=1, padding=0
+                )
         elif self.is_input_vectorized:
-            assert sample_size is not None, "Transformer2DModel over discrete input must provide sample_size"
-            assert num_vector_embeds is not None, "Transformer2DModel over discrete input must provide num_embed"
+            assert (
+                sample_size is not None
+            ), "Transformer2DModel over discrete input must provide sample_size"
+            assert (
+                num_vector_embeds is not None
+            ), "Transformer2DModel over discrete input must provide num_embed"
 
             self.height = sample_size
             self.width = sample_size
@@ -171,10 +192,15 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
             self.num_latent_pixels = self.height * self.width
 
             self.latent_image_embedding = ImagePositionalEmbeddings(
-                num_embed=num_vector_embeds, embed_dim=inner_dim, height=self.height, width=self.width
+                num_embed=num_vector_embeds,
+                embed_dim=inner_dim,
+                height=self.height,
+                width=self.width,
             )
         elif self.is_input_patches:
-            assert sample_size is not None, "Transformer2DModel over patched input must provide sample_size"
+            assert (
+                sample_size is not None
+            ), "Transformer2DModel over patched input must provide sample_size"
 
             self.height = sample_size
             self.width = sample_size
@@ -209,7 +235,7 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
                     cd_attention_mid=cd_attention_mid,
                     multiview_attention=multiview_attention,
                     mvcd_attention=mvcd_attention,
-                    use_dino=use_dino
+                    use_dino=use_dino,
                 )
                 for d in range(num_layers)
             ]
@@ -222,14 +248,18 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
             if use_linear_projection:
                 self.proj_out = LoRACompatibleLinear(inner_dim, in_channels)
             else:
-                self.proj_out = LoRACompatibleConv(inner_dim, in_channels, kernel_size=1, stride=1, padding=0)
+                self.proj_out = LoRACompatibleConv(
+                    inner_dim, in_channels, kernel_size=1, stride=1, padding=0
+                )
         elif self.is_input_vectorized:
             self.norm_out = nn.LayerNorm(inner_dim)
             self.out = nn.Linear(inner_dim, self.num_vector_embeds - 1)
         elif self.is_input_patches:
             self.norm_out = nn.LayerNorm(inner_dim, elementwise_affine=False, eps=1e-6)
             self.proj_out_1 = nn.Linear(inner_dim, 2 * inner_dim)
-            self.proj_out_2 = nn.Linear(inner_dim, patch_size * patch_size * self.out_channels)
+            self.proj_out_2 = nn.Linear(
+                inner_dim, patch_size * patch_size * self.out_channels
+            )
 
     def forward(
         self,
@@ -293,7 +323,9 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
 
         # convert encoder_attention_mask to a bias the same way we do for attention_mask
         if encoder_attention_mask is not None and encoder_attention_mask.ndim == 2:
-            encoder_attention_mask = (1 - encoder_attention_mask.to(hidden_states.dtype)) * -10000.0
+            encoder_attention_mask = (
+                1 - encoder_attention_mask.to(hidden_states.dtype)
+            ) * -10000.0
             encoder_attention_mask = encoder_attention_mask.unsqueeze(1)
 
         # 1. Input
@@ -305,10 +337,14 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
             if not self.use_linear_projection:
                 hidden_states = self.proj_in(hidden_states)
                 inner_dim = hidden_states.shape[1]
-                hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch, height * width, inner_dim)
+                hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(
+                    batch, height * width, inner_dim
+                )
             else:
                 inner_dim = hidden_states.shape[1]
-                hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch, height * width, inner_dim)
+                hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(
+                    batch, height * width, inner_dim
+                )
                 hidden_states = self.proj_in(hidden_states)
         elif self.is_input_vectorized:
             hidden_states = self.latent_image_embedding(hidden_states)
@@ -331,11 +367,19 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
         # 3. Output
         if self.is_input_continuous:
             if not self.use_linear_projection:
-                hidden_states = hidden_states.reshape(batch, height, width, inner_dim).permute(0, 3, 1, 2).contiguous()
+                hidden_states = (
+                    hidden_states.reshape(batch, height, width, inner_dim)
+                    .permute(0, 3, 1, 2)
+                    .contiguous()
+                )
                 hidden_states = self.proj_out(hidden_states)
             else:
                 hidden_states = self.proj_out(hidden_states)
-                hidden_states = hidden_states.reshape(batch, height, width, inner_dim).permute(0, 3, 1, 2).contiguous()
+                hidden_states = (
+                    hidden_states.reshape(batch, height, width, inner_dim)
+                    .permute(0, 3, 1, 2)
+                    .contiguous()
+                )
 
             output = hidden_states + residual
         elif self.is_input_vectorized:
@@ -352,17 +396,31 @@ class TransformerMV2DModel(ModelMixin, ConfigMixin):
                 timestep, class_labels, hidden_dtype=hidden_states.dtype
             )
             shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=1)
-            hidden_states = self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
+            hidden_states = (
+                self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
+            )
             hidden_states = self.proj_out_2(hidden_states)
 
             # unpatchify
             height = width = int(hidden_states.shape[1] ** 0.5)
             hidden_states = hidden_states.reshape(
-                shape=(-1, height, width, self.patch_size, self.patch_size, self.out_channels)
+                shape=(
+                    -1,
+                    height,
+                    width,
+                    self.patch_size,
+                    self.patch_size,
+                    self.out_channels,
+                )
             )
             hidden_states = torch.einsum("nhwpqc->nchpwq", hidden_states)
             output = hidden_states.reshape(
-                shape=(-1, self.out_channels, height * self.patch_size, width * self.patch_size)
+                shape=(
+                    -1,
+                    self.out_channels,
+                    height * self.patch_size,
+                    width * self.patch_size,
+                )
             )
 
         if not return_dict:
@@ -415,13 +473,17 @@ class BasicMVTransformerBlock(nn.Module):
         multiview_attention: bool = True,
         mvcd_attention: bool = False,
         rowwise_attention: bool = True,
-        use_dino: bool = False
+        use_dino: bool = False,
     ):
         super().__init__()
         self.only_cross_attention = only_cross_attention
 
-        self.use_ada_layer_norm_zero = (num_embeds_ada_norm is not None) and norm_type == "ada_norm_zero"
-        self.use_ada_layer_norm = (num_embeds_ada_norm is not None) and norm_type == "ada_norm"
+        self.use_ada_layer_norm_zero = (
+            num_embeds_ada_norm is not None
+        ) and norm_type == "ada_norm_zero"
+        self.use_ada_layer_norm = (
+            num_embeds_ada_norm is not None
+        ) and norm_type == "ada_norm"
 
         if norm_type in ("ada_norm", "ada_norm_zero") and num_embeds_ada_norm is None:
             raise ValueError(
@@ -444,16 +506,18 @@ class BasicMVTransformerBlock(nn.Module):
         self.rowwise_attention = multiview_attention and rowwise_attention
 
         if mvcd_attention and (not cd_attention_mid):
-        # add cross domain attn to self attn
+            # add cross domain attn to self attn
             self.attn1 = CustomJointAttention(
                 query_dim=dim,
                 heads=num_attention_heads,
                 dim_head=attention_head_dim,
                 dropout=dropout,
                 bias=attention_bias,
-                cross_attention_dim=cross_attention_dim if only_cross_attention else None,
+                cross_attention_dim=cross_attention_dim
+                if only_cross_attention
+                else None,
                 upcast_attention=upcast_attention,
-                processor=JointAttnProcessor()
+                processor=JointAttnProcessor(),
             )
         else:
             self.attn1 = Attention(
@@ -462,27 +526,31 @@ class BasicMVTransformerBlock(nn.Module):
                 dim_head=attention_head_dim,
                 dropout=dropout,
                 bias=attention_bias,
-                cross_attention_dim=cross_attention_dim if only_cross_attention else None,
-                upcast_attention=upcast_attention
+                cross_attention_dim=cross_attention_dim
+                if only_cross_attention
+                else None,
+                upcast_attention=upcast_attention,
             )
         # 1.1 rowwise multiview attention
         if self.rowwise_attention:
             # print('INFO: using self+row_wise mv attention...')
             self.norm_mv = (
-                    AdaLayerNorm(dim, num_embeds_ada_norm)
-                    if self.use_ada_layer_norm
-                    else nn.LayerNorm(dim, elementwise_affine=norm_elementwise_affine)
+                AdaLayerNorm(dim, num_embeds_ada_norm)
+                if self.use_ada_layer_norm
+                else nn.LayerNorm(dim, elementwise_affine=norm_elementwise_affine)
             )
             self.attn_mv = CustomAttention(
-                    query_dim=dim,
-                    heads=num_attention_heads,
-                    dim_head=attention_head_dim,
-                    dropout=dropout,
-                    bias=attention_bias,
-                    cross_attention_dim=cross_attention_dim if only_cross_attention else None,
-                    upcast_attention=upcast_attention,
-                    processor=MVAttnProcessor() 
-                )
+                query_dim=dim,
+                heads=num_attention_heads,
+                dim_head=attention_head_dim,
+                dropout=dropout,
+                bias=attention_bias,
+                cross_attention_dim=cross_attention_dim
+                if only_cross_attention
+                else None,
+                upcast_attention=upcast_attention,
+                processor=MVAttnProcessor(),
+            )
             nn.init.zeros_(self.attn_mv.to_out[0].weight.data)
         else:
             self.norm_mv = None
@@ -505,7 +573,7 @@ class BasicMVTransformerBlock(nn.Module):
         # else:
         #     self.attn_joint = None
         #     self.norm_joint = None
-            
+
         # 2. Cross-Attn
         if cross_attention_dim is not None or double_self_attention:
             # We currently only use AdaLayerNormZero for self attention where there will only be one attention block.
@@ -518,7 +586,9 @@ class BasicMVTransformerBlock(nn.Module):
             )
             self.attn2 = Attention(
                 query_dim=dim,
-                cross_attention_dim=cross_attention_dim if not double_self_attention else None,
+                cross_attention_dim=cross_attention_dim
+                if not double_self_attention
+                else None,
                 heads=num_attention_heads,
                 dim_head=attention_head_dim,
                 dropout=dropout,
@@ -531,7 +601,12 @@ class BasicMVTransformerBlock(nn.Module):
 
         # 3. Feed-forward
         self.norm3 = nn.LayerNorm(dim, elementwise_affine=norm_elementwise_affine)
-        self.ff = FeedForward(dim, dropout=dropout, activation_fn=activation_fn, final_dropout=final_dropout)
+        self.ff = FeedForward(
+            dim,
+            dropout=dropout,
+            activation_fn=activation_fn,
+            final_dropout=final_dropout,
+        )
 
         # let chunk size default to None
         self._chunk_size = None
@@ -539,7 +614,6 @@ class BasicMVTransformerBlock(nn.Module):
 
         self.num_views = num_views
 
-       
     def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int):
         # Sets chunk feed-forward
         self._chunk_size = chunk_size
@@ -554,9 +628,9 @@ class BasicMVTransformerBlock(nn.Module):
         timestep: Optional[torch.LongTensor] = None,
         cross_attention_kwargs: Dict[str, Any] = None,
         class_labels: Optional[torch.LongTensor] = None,
-        dino_feature: Optional[torch.FloatTensor] = None
+        dino_feature: Optional[torch.FloatTensor] = None,
     ):
-        assert attention_mask is None # not supported yet
+        assert attention_mask is None  # not supported yet
         # Notice that normalization is always applied before the real computation in the following blocks.
         # 1. Self-Attention
         if self.use_ada_layer_norm:
@@ -568,44 +642,52 @@ class BasicMVTransformerBlock(nn.Module):
         else:
             norm_hidden_states = self.norm1(hidden_states)
 
-        cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
+        cross_attention_kwargs = (
+            cross_attention_kwargs if cross_attention_kwargs is not None else {}
+        )
 
         attn_output = self.attn1(
             norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
+            encoder_hidden_states=encoder_hidden_states
+            if self.only_cross_attention
+            else None,
             attention_mask=attention_mask,
             # multiview_attention=self.multiview_attention,
             # mvcd_attention=self.mvcd_attention,
             **cross_attention_kwargs,
         )
 
-
         if self.use_ada_layer_norm_zero:
             attn_output = gate_msa.unsqueeze(1) * attn_output
         hidden_states = attn_output + hidden_states
-        
+
         # import pdb;pdb.set_trace()
         # 1.1 row wise multiview attention
         if self.rowwise_attention:
             norm_hidden_states = (
-                self.norm_mv(hidden_states, timestep) if self.use_ada_layer_norm else self.norm_mv(hidden_states)
+                self.norm_mv(hidden_states, timestep)
+                if self.use_ada_layer_norm
+                else self.norm_mv(hidden_states)
             )
             attn_output = self.attn_mv(
                 norm_hidden_states,
-                encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
+                encoder_hidden_states=encoder_hidden_states
+                if self.only_cross_attention
+                else None,
                 attention_mask=attention_mask,
                 num_views=self.num_views,
                 multiview_attention=self.multiview_attention,
                 cd_attention_mid=self.cd_attention_mid,
                 **cross_attention_kwargs,
-                )
-            hidden_states = attn_output + hidden_states 
-            
-    
+            )
+            hidden_states = attn_output + hidden_states
+
         # 2. Cross-Attention
         if self.attn2 is not None:
             norm_hidden_states = (
-                self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)
+                self.norm2(hidden_states, timestep)
+                if self.use_ada_layer_norm
+                else self.norm2(hidden_states)
             )
 
             attn_output = self.attn2(
@@ -620,7 +702,9 @@ class BasicMVTransformerBlock(nn.Module):
         norm_hidden_states = self.norm3(hidden_states)
 
         if self.use_ada_layer_norm_zero:
-            norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+            norm_hidden_states = (
+                norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+            )
 
         if self._chunk_size is not None:
             # "feed_forward_chunk_size" can be used to save memory
@@ -631,7 +715,12 @@ class BasicMVTransformerBlock(nn.Module):
 
             num_chunks = norm_hidden_states.shape[self._chunk_dim] // self._chunk_size
             ff_output = torch.cat(
-                [self.ff(hid_slice) for hid_slice in norm_hidden_states.chunk(num_chunks, dim=self._chunk_dim)],
+                [
+                    self.ff(hid_slice)
+                    for hid_slice in norm_hidden_states.chunk(
+                        num_chunks, dim=self._chunk_dim
+                    )
+                ],
                 dim=self._chunk_dim,
             )
         else:
@@ -643,7 +732,7 @@ class BasicMVTransformerBlock(nn.Module):
         hidden_states = ff_output + hidden_states
 
         return hidden_states
-    
+
 
 class CustomAttention(Attention):
     def set_use_memory_efficient_attention_xformers(
@@ -662,6 +751,7 @@ class CustomJointAttention(Attention):
         self.set_processor(processor)
         # print("using xformers attention processor")
 
+
 class MVAttnProcessor:
     r"""
     Default processor for performing attention-related computations.
@@ -675,7 +765,7 @@ class MVAttnProcessor:
         attention_mask=None,
         temb=None,
         num_views=1,
-        cd_attention_mid=False
+        cd_attention_mid=False,
     ):
         residual = hidden_states
 
@@ -686,36 +776,50 @@ class MVAttnProcessor:
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        height = int(math.sqrt(sequence_length)) 
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        height = int(math.sqrt(sequence_length))
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         query = attn.to_q(hidden_states)
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
         # print('query', query.shape, 'key', key.shape, 'value', value.shape)
-        #([bx4, 1024, 320]) key torch.Size([bx4, 1024, 320]) value torch.Size([bx4, 1024, 320])
+        # ([bx4, 1024, 320]) key torch.Size([bx4, 1024, 320]) value torch.Size([bx4, 1024, 320])
         # pdb.set_trace()
         # multi-view self-attention
         def transpose(tensor):
-            tensor = rearrange(tensor, "(b v) (h w) c -> b v h w c", v=num_views, h=height)
+            tensor = rearrange(
+                tensor, "(b v) (h w) c -> b v h w c", v=num_views, h=height
+            )
             tensor_0, tensor_1 = torch.chunk(tensor, dim=0, chunks=2)  # b v h w c
             tensor = torch.cat([tensor_0, tensor_1], dim=3)  # b v h 2w c
-            tensor = rearrange(tensor, "b v h w c -> (b h) (v w) c", v=num_views, h=height)
+            tensor = rearrange(
+                tensor, "b v h w c -> (b h) (v w) c", v=num_views, h=height
+            )
             return tensor
 
         if cd_attention_mid:
@@ -723,14 +827,20 @@ class MVAttnProcessor:
             value = transpose(value)
             query = transpose(query)
         else:
-            key = rearrange(key, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height) 
-            value = rearrange(value, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height)
-            query = rearrange(query, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height) # torch.Size([192, 384, 320])
+            key = rearrange(
+                key, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height
+            )
+            value = rearrange(
+                value, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height
+            )
+            query = rearrange(
+                query, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height
+            )  # torch.Size([192, 384, 320])
 
         query = attn.head_to_batch_dim(query).contiguous()
         key = attn.head_to_batch_dim(key).contiguous()
         value = attn.head_to_batch_dim(value).contiguous()
-        
+
         attention_probs = attn.get_attention_scores(query, key, attention_mask)
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
@@ -740,20 +850,32 @@ class MVAttnProcessor:
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
         if cd_attention_mid:
-            hidden_states = rearrange(hidden_states, "(b h) (v w) c -> b v h w c", v=num_views, h=height)
-            hidden_states_0, hidden_states_1 = torch.chunk(hidden_states, dim=3, chunks=2)  # b v h w c
-            hidden_states = torch.cat([hidden_states_0, hidden_states_1], dim=0)  # 2b v h w c
-            hidden_states = rearrange(hidden_states, "b v h w c -> (b v) (h w) c", v=num_views, h=height) 
+            hidden_states = rearrange(
+                hidden_states, "(b h) (v w) c -> b v h w c", v=num_views, h=height
+            )
+            hidden_states_0, hidden_states_1 = torch.chunk(
+                hidden_states, dim=3, chunks=2
+            )  # b v h w c
+            hidden_states = torch.cat(
+                [hidden_states_0, hidden_states_1], dim=0
+            )  # 2b v h w c
+            hidden_states = rearrange(
+                hidden_states, "b v h w c -> (b v) (h w) c", v=num_views, h=height
+            )
         else:
-            hidden_states = rearrange(hidden_states, "(b h) (v w) c -> (b v) (h w) c", v=num_views, h=height)
+            hidden_states = rearrange(
+                hidden_states, "(b h) (v w) c -> (b v) (h w) c", v=num_views, h=height
+            )
         if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+            hidden_states = hidden_states.transpose(-1, -2).reshape(
+                batch_size, channel, height, width
+            )
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual
 
         hidden_states = hidden_states / attn.rescale_output_factor
-        
+
         return hidden_states
 
 
@@ -771,7 +893,7 @@ class XFormersMVAttnProcessor:
         temb=None,
         num_views=1,
         multiview_attention=True,
-        cd_attention_mid=False
+        cd_attention_mid=False,
     ):
         # print(num_views)
         residual = hidden_states
@@ -783,13 +905,19 @@ class XFormersMVAttnProcessor:
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        height = int(math.sqrt(sequence_length)) 
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        height = int(math.sqrt(sequence_length))
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
         # from yuancheng; here attention_mask is None
         if attention_mask is not None:
             # expand our mask's singleton query_tokens dimension:
@@ -802,15 +930,21 @@ class XFormersMVAttnProcessor:
             attention_mask = attention_mask.expand(-1, query_tokens, -1)
 
         if attn.group_norm is not None:
-            print('Warning: using group norm, pay attention to use it in row-wise attention')
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            print(
+                "Warning: using group norm, pay attention to use it in row-wise attention"
+            )
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         query = attn.to_q(hidden_states)
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         key_raw = attn.to_k(encoder_hidden_states)
         value_raw = attn.to_v(encoder_hidden_states)
@@ -818,11 +952,16 @@ class XFormersMVAttnProcessor:
         # print('query', query.shape, 'key', key.shape, 'value', value.shape)
         # pdb.set_trace()
         def transpose(tensor):
-            tensor = rearrange(tensor, "(b v) (h w) c -> b v h w c", v=num_views, h=height)
+            tensor = rearrange(
+                tensor, "(b v) (h w) c -> b v h w c", v=num_views, h=height
+            )
             tensor_0, tensor_1 = torch.chunk(tensor, dim=0, chunks=2)  # b v h w c
             tensor = torch.cat([tensor_0, tensor_1], dim=3)  # b v h 2w c
-            tensor = rearrange(tensor, "b v h w c -> (b h) (v w) c", v=num_views, h=height)
+            tensor = rearrange(
+                tensor, "b v h w c -> (b h) (v w) c", v=num_views, h=height
+            )
             return tensor
+
         # print(mvcd_attention)
         # import pdb;pdb.set_trace()
         if cd_attention_mid:
@@ -830,16 +969,23 @@ class XFormersMVAttnProcessor:
             value = transpose(value_raw)
             query = transpose(query)
         else:
-            key = rearrange(key_raw, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height) 
-            value = rearrange(value_raw, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height)
-            query = rearrange(query, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height) # torch.Size([192, 384, 320])
+            key = rearrange(
+                key_raw, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height
+            )
+            value = rearrange(
+                value_raw, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height
+            )
+            query = rearrange(
+                query, "(b v) (h w) c -> (b h) (v w) c", v=num_views, h=height
+            )  # torch.Size([192, 384, 320])
 
-
-        query = attn.head_to_batch_dim(query) # torch.Size([960, 384, 64])
+        query = attn.head_to_batch_dim(query)  # torch.Size([960, 384, 64])
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
 
-        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
+        hidden_states = xformers.ops.memory_efficient_attention(
+            query, key, value, attn_bias=attention_mask
+        )
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
         # linear proj
@@ -848,20 +994,32 @@ class XFormersMVAttnProcessor:
         hidden_states = attn.to_out[1](hidden_states)
 
         if cd_attention_mid:
-            hidden_states = rearrange(hidden_states, "(b h) (v w) c -> b v h w c", v=num_views, h=height)
-            hidden_states_0, hidden_states_1 = torch.chunk(hidden_states, dim=3, chunks=2)  # b v h w c
-            hidden_states = torch.cat([hidden_states_0, hidden_states_1], dim=0)  # 2b v h w c
-            hidden_states = rearrange(hidden_states, "b v h w c -> (b v) (h w) c", v=num_views, h=height) 
+            hidden_states = rearrange(
+                hidden_states, "(b h) (v w) c -> b v h w c", v=num_views, h=height
+            )
+            hidden_states_0, hidden_states_1 = torch.chunk(
+                hidden_states, dim=3, chunks=2
+            )  # b v h w c
+            hidden_states = torch.cat(
+                [hidden_states_0, hidden_states_1], dim=0
+            )  # 2b v h w c
+            hidden_states = rearrange(
+                hidden_states, "b v h w c -> (b v) (h w) c", v=num_views, h=height
+            )
         else:
-            hidden_states = rearrange(hidden_states, "(b h) (v w) c -> (b v) (h w) c", v=num_views, h=height)
+            hidden_states = rearrange(
+                hidden_states, "(b h) (v w) c -> (b v) (h w) c", v=num_views, h=height
+            )
         if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+            hidden_states = hidden_states.transpose(-1, -2).reshape(
+                batch_size, channel, height, width
+            )
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual
 
         hidden_states = hidden_states / attn.rescale_output_factor
-        
+
         return hidden_states
 
 
@@ -877,7 +1035,7 @@ class XFormersJointAttnProcessor:
         encoder_hidden_states=None,
         attention_mask=None,
         temb=None,
-        num_tasks=2
+        num_tasks=2,
     ):
         residual = hidden_states
 
@@ -888,12 +1046,18 @@ class XFormersJointAttnProcessor:
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         # from yuancheng; here attention_mask is None
         if attention_mask is not None:
@@ -907,14 +1071,18 @@ class XFormersJointAttnProcessor:
             attention_mask = attention_mask.expand(-1, query_tokens, -1)
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         query = attn.to_q(hidden_states)
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -924,8 +1092,9 @@ class XFormersJointAttnProcessor:
         def transpose(tensor):
             tensor_0, tensor_1 = torch.chunk(tensor, dim=0, chunks=2)  # bv hw c
             tensor = torch.cat([tensor_0, tensor_1], dim=1)  # bv 2hw c
-            return tensor 
-        key  = transpose(key)
+            return tensor
+
+        key = transpose(key)
         value = transpose(value)
         query = transpose(query)
         # from icecream import ic
@@ -935,24 +1104,32 @@ class XFormersJointAttnProcessor:
         key = attn.head_to_batch_dim(key).contiguous()
         value = attn.head_to_batch_dim(value).contiguous()
 
-        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
+        hidden_states = xformers.ops.memory_efficient_attention(
+            query, key, value, attn_bias=attention_mask
+        )
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
-        hidden_states_normal, hidden_states_color = torch.chunk(hidden_states, dim=1, chunks=2)
-        hidden_states = torch.cat([hidden_states_normal, hidden_states_color], dim=0)  # 2bv hw c
-        
+        hidden_states_normal, hidden_states_color = torch.chunk(
+            hidden_states, dim=1, chunks=2
+        )
+        hidden_states = torch.cat(
+            [hidden_states_normal, hidden_states_color], dim=0
+        )  # 2bv hw c
+
         if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+            hidden_states = hidden_states.transpose(-1, -2).reshape(
+                batch_size, channel, height, width
+            )
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual
 
         hidden_states = hidden_states / attn.rescale_output_factor
-        
+
         return hidden_states
 
 
@@ -968,9 +1145,8 @@ class JointAttnProcessor:
         encoder_hidden_states=None,
         attention_mask=None,
         temb=None,
-        num_tasks=2
+        num_tasks=2,
     ):
-        
         residual = hidden_states
 
         if attn.spatial_norm is not None:
@@ -980,23 +1156,32 @@ class JointAttnProcessor:
 
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+            hidden_states = hidden_states.view(
+                batch_size, channel, height * width
+            ).transpose(1, 2)
 
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape
+            if encoder_hidden_states is None
+            else encoder_hidden_states.shape
         )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-
+        attention_mask = attn.prepare_attention_mask(
+            attention_mask, sequence_length, batch_size
+        )
 
         if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(
+                1, 2
+            )
 
         query = attn.to_q(hidden_states)
 
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+            encoder_hidden_states = attn.norm_encoder_hidden_states(
+                encoder_hidden_states
+            )
 
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
@@ -1006,12 +1191,12 @@ class JointAttnProcessor:
         def transpose(tensor):
             tensor_0, tensor_1 = torch.chunk(tensor, dim=0, chunks=2)  # bv hw c
             tensor = torch.cat([tensor_0, tensor_1], dim=1)  # bv 2hw c
-            return tensor 
-        key  = transpose(key)
+            return tensor
+
+        key = transpose(key)
         value = transpose(value)
         query = transpose(query)
 
-        
         query = attn.head_to_batch_dim(query).contiguous()
         key = attn.head_to_batch_dim(key).contiguous()
         value = attn.head_to_batch_dim(value).contiguous()
@@ -1020,19 +1205,22 @@ class JointAttnProcessor:
         hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
-        
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
-        hidden_states = torch.cat([hidden_states[:, 0], hidden_states[:, 1]], dim=0)  # 2bv hw c
+        hidden_states = torch.cat(
+            [hidden_states[:, 0], hidden_states[:, 1]], dim=0
+        )  # 2bv hw c
         if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+            hidden_states = hidden_states.transpose(-1, -2).reshape(
+                batch_size, channel, height, width
+            )
 
         if attn.residual_connection:
             hidden_states = hidden_states + residual
 
         hidden_states = hidden_states / attn.rescale_output_factor
-        
+
         return hidden_states

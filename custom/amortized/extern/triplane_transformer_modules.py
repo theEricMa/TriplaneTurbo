@@ -1,18 +1,24 @@
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
+from diffusers.models.attention_processor import (
+    Attention,
+    AttentionProcessor,
+    AttnProcessor,
+    LoRAAttnProcessor,
+)
 
-from diffusers.models.attention_processor import Attention, AttnProcessor, LoRAAttnProcessor, AttentionProcessor
 from threestudio.utils.typing import *
 
 
 class ModLN(nn.Module):
     """
     Modulation with adaLN.
-    
+
     References:
     DiT: https://github.com/facebookresearch/DiT/blob/main/models.py#L101
     """
+
     def __init__(self, inner_dim: int, mod_dim: int, eps: float):
         super().__init__()
         self.norm = nn.LayerNorm(inner_dim, eps=eps)
@@ -30,28 +36,46 @@ class ModLN(nn.Module):
         shift, scale = self.mlp(cond).chunk(2, dim=-1)  # [N, D]
         return self.modulate(self.norm(x), shift, scale)  # [N, L, D]
 
+
 class ConditionModulationBlock(nn.Module):
     """
     Transformer block that takes in a cross-attention condition and another modulation vector applied to sub-blocks.
     """
+
     # use attention from torch.nn.MultiHeadAttention
     # Block contains a cross-attention layer, a self-attention layer, and a MLP
-    def __init__(self, inner_dim: int, cond_dim: int, num_heads: int, eps: float,  mlp_ratio: float = 4.,
-                 attn_drop: float = 0., attn_bias: bool = False,
-                 mlp_drop: float = 0.):
+    def __init__(
+        self,
+        inner_dim: int,
+        cond_dim: int,
+        num_heads: int,
+        eps: float,
+        mlp_ratio: float = 4.0,
+        attn_drop: float = 0.0,
+        attn_bias: bool = False,
+        mlp_drop: float = 0.0,
+    ):
         super().__init__()
 
         self.norm1 = nn.LayerNorm(inner_dim, eps)
         self.cross_attn = Attention(
-            query_dim=inner_dim, heads=num_heads, dim_head=inner_dim // num_heads,
-            cross_attention_dim=cond_dim, 
-            dropout=attn_drop, bias=attn_bias, )
-        self.norm2 =  nn.LayerNorm(inner_dim, eps)
+            query_dim=inner_dim,
+            heads=num_heads,
+            dim_head=inner_dim // num_heads,
+            cross_attention_dim=cond_dim,
+            dropout=attn_drop,
+            bias=attn_bias,
+        )
+        self.norm2 = nn.LayerNorm(inner_dim, eps)
         self.self_attn = Attention(
-            query_dim=inner_dim, heads=num_heads, dim_head=inner_dim // num_heads,
-            cross_attention_dim=inner_dim, 
-            dropout=attn_drop, bias=attn_bias, )
-        self.norm3 =  nn.LayerNorm(inner_dim, eps)
+            query_dim=inner_dim,
+            heads=num_heads,
+            dim_head=inner_dim // num_heads,
+            cross_attention_dim=inner_dim,
+            dropout=attn_drop,
+            bias=attn_bias,
+        )
+        self.norm3 = nn.LayerNorm(inner_dim, eps)
         self.mlp = nn.Sequential(
             nn.Linear(inner_dim, int(inner_dim * mlp_ratio)),
             nn.GELU(),
@@ -70,20 +94,35 @@ class ConditionModulationBlock(nn.Module):
         x = x + self.mlp(self.norm3(x))
         return x
 
+
 class ConditionModulationBlockwoCrossAttn(nn.Module):
     """
     Transformer block that takes in a cross-attention condition and another modulation vector applied to sub-blocks.
     """
+
     # use attention from torch.nn.MultiHeadAttention
     # Block contains a cross-attention layer, a self-attention layer, and a MLP
-    def __init__(self, inner_dim: int, cond_dim: int, num_heads: int, eps: float, mlp_ratio: float = 4.,
-                 attn_drop: float = 0., attn_bias: bool = False, mlp_drop: float = 0.):
+    def __init__(
+        self,
+        inner_dim: int,
+        cond_dim: int,
+        num_heads: int,
+        eps: float,
+        mlp_ratio: float = 4.0,
+        attn_drop: float = 0.0,
+        attn_bias: bool = False,
+        mlp_drop: float = 0.0,
+    ):
         super().__init__()
         self.norm2 = nn.LayerNorm(inner_dim, eps)
         self.self_attn = Attention(
-            query_dim=inner_dim, heads=num_heads, dim_head=inner_dim // num_heads,
-            cross_attention_dim=inner_dim, 
-            dropout=attn_drop, bias=attn_bias, )
+            query_dim=inner_dim,
+            heads=num_heads,
+            dim_head=inner_dim // num_heads,
+            cross_attention_dim=inner_dim,
+            dropout=attn_drop,
+            bias=attn_bias,
+        )
         self.norm3 = nn.LayerNorm(inner_dim, eps)
         self.mlp = nn.Sequential(
             nn.GELU(),
@@ -111,20 +150,28 @@ class ConditionModulationBlockwoCrossAttn(nn.Module):
         return x
 
 
-
 class TriplaneTransformer(nn.Module):
     """
     Transformer with condition and modulation that generates a triplane representation.
-    
+
     Reference:
     Timm: https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/vision_transformer.py#L486
     """
-    def __init__(self, 
-                inner_dim: int, condition_dim: int,
-                triplane_low_res: int, triplane_high_res: int, triplane_dim: int,
-                num_layers: int, num_heads: int,
-                flash_attention: bool, local_text: bool,
-                mlp_ratio: float = 4., eps: float = 1e-6):
+
+    def __init__(
+        self,
+        inner_dim: int,
+        condition_dim: int,
+        triplane_low_res: int,
+        triplane_high_res: int,
+        triplane_dim: int,
+        num_layers: int,
+        num_heads: int,
+        flash_attention: bool,
+        local_text: bool,
+        mlp_ratio: float = 4.0,
+        eps: float = 1e-6,
+    ):
         super().__init__()
 
         # attributes
@@ -134,26 +181,46 @@ class TriplaneTransformer(nn.Module):
 
         # modules
         # initialize pos_embed with 1/sqrt(dim) * N(0, 1)
-        self.pos_embed = nn.Parameter(torch.randn(1, 3*triplane_low_res**2, inner_dim) * (1. / inner_dim) ** 0.5)
-        
+        self.pos_embed = nn.Parameter(
+            torch.randn(1, 3 * triplane_low_res**2, inner_dim)
+            * (1.0 / inner_dim) ** 0.5
+        )
+
         # condition modulation
         self.needs_local_text = local_text
-        self.layers = nn.ModuleList([
-            ConditionModulationBlockwoCrossAttn(
-                inner_dim=inner_dim, cond_dim=condition_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, eps=eps,
-            ) if not local_text else \
-            ConditionModulationBlock(
-                inner_dim=inner_dim, cond_dim=condition_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, eps=eps,
-            ) for _ in range(num_layers)
-        ])
-        
+        self.layers = nn.ModuleList(
+            [
+                ConditionModulationBlockwoCrossAttn(
+                    inner_dim=inner_dim,
+                    cond_dim=condition_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    eps=eps,
+                )
+                if not local_text
+                else ConditionModulationBlock(
+                    inner_dim=inner_dim,
+                    cond_dim=condition_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    eps=eps,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+
         if flash_attention:
             from xformers.ops import MemoryEfficientAttentionFlashAttentionOp
-            self.set_use_memory_efficient_attention_xformers(True, MemoryEfficientAttentionFlashAttentionOp)
+
+            self.set_use_memory_efficient_attention_xformers(
+                True, MemoryEfficientAttentionFlashAttentionOp
+            )
 
         self.norm = nn.LayerNorm(inner_dim, eps=eps)
-        self.deconv = nn.ConvTranspose2d(inner_dim, triplane_dim, kernel_size=2, stride=2, padding=0, bias=False) 
-   
+        self.deconv = nn.ConvTranspose2d(
+            inner_dim, triplane_dim, kernel_size=2, stride=2, padding=0, bias=False
+        )
+
         if not local_text:
             self.proj = nn.Linear(condition_dim, inner_dim)
 
@@ -176,21 +243,23 @@ class TriplaneTransformer(nn.Module):
 
         # separate each plane and apply deconv
         x = x.view(N, 3, H, W, -1)
-        x = torch.einsum('nihwd->indhw', x)  # [3, N, D, H, W]
-        x = x.contiguous().view(3*N, -1, H, W)  # [3*N, D, H, W]
+        x = torch.einsum("nihwd->indhw", x)  # [3, N, D, H, W]
+        x = x.contiguous().view(3 * N, -1, H, W)  # [3*N, D, H, W]
         x = self.deconv(x)  # [3*N, D', H', W']
         # x = torch.tanh(x) # tanh help convergence
         x = x.view(3, N, *x.shape[-3:])  # [3, N, D', H', W']
-        x = torch.einsum('indhw->nidhw', x)  # [N, 3, D', H', W']
+        x = torch.einsum("indhw->nidhw", x)  # [N, 3, D', H', W']
         x = x.contiguous()
 
-        assert self.triplane_high_res == x.shape[-2], \
-            f"Output triplane resolution does not match with expected: {x.shape[-2]} vs {self.triplane_high_res}"
-        assert self.triplane_dim == x.shape[-3], \
-            f"Output triplane dimension does not match with expected: {x.shape[-3]} vs {self.triplane_dim}"
+        assert (
+            self.triplane_high_res == x.shape[-2]
+        ), f"Output triplane resolution does not match with expected: {x.shape[-2]} vs {self.triplane_high_res}"
+        assert (
+            self.triplane_dim == x.shape[-3]
+        ), f"Output triplane dimension does not match with expected: {x.shape[-3]} vs {self.triplane_dim}"
 
         return x
-         
+
     # the following are copied from diffusers
     # for use_memory_efficient_attention_xformers ########################################
     def set_use_memory_efficient_attention_xformers(
@@ -221,9 +290,15 @@ class TriplaneTransformer(nn.Module):
         # set recursively
         processors = {}
 
-        def fn_recursive_add_processors(name: str, module: torch.nn.Module, processors: Dict[str, AttentionProcessor]):
+        def fn_recursive_add_processors(
+            name: str,
+            module: torch.nn.Module,
+            processors: Dict[str, AttentionProcessor],
+        ):
             if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor(return_deprecated_lora=True)
+                processors[f"{name}.processor"] = module.get_processor(
+                    return_deprecated_lora=True
+                )
 
             for sub_name, child in module.named_children():
                 fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
@@ -235,7 +310,9 @@ class TriplaneTransformer(nn.Module):
 
         return processors
 
-    def set_attn_processor(self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]):
+    def set_attn_processor(
+        self, processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]]
+    ):
         r"""
         Sets the attention processor to use to compute attention.
 
