@@ -128,6 +128,81 @@ python evaluation/clipscore/compute.py \
 ```
 The evaluation results will be displayed in your terminal once the computation is complete.
 
+## 🚀 Training Options
+
+### 1. Download Required Pretrained Models and Datasets
+Use the provided download script to get all necessary files:
+```sh
+python scripts/prepare/download_full.py
+```
+
+This will download:
+- Stable Diffusion 2.1 Base
+- Stable Diffusion 1.5
+- MVDream 4-view checkpoint
+- RichDreamer checkpoint
+- Text prompt datasets (3DTopia and DALLE+Midjourney)
+
+### 2. Training Options
+
+#### Option 1: Train with 3DTopia Text Prompts
+```sh
+# Single GPU
+CUDA_VISIBLE_DEVICES=0 python launch.py \
+    --config configs/TriplaneTurbo_v0_acc-2.yaml \
+    --train \
+    data.prompt_library="3DTopia_prompt_library" \
+    data.condition_processor.cache_dir=".threestudio_cache/text_embeddings_3DTopia" \
+    data.guidance_processor.cache_dir=".threestudio_cache/text_embeddings_3DTopia"
+```
+
+For multi-GPU training:
+```sh
+# 8 GPUs with 48GB+ memory each
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python launch.py \
+    --config configs/TriplaneTurbo_v1_acc-2.yaml \
+    --train \
+    data.prompt_library="3DTopia_361k_prompt_library" \
+    data.condition_processor.cache_dir=".threestudio_cache/text_embeddings_3DTopia" \
+    data.guidance_processor.cache_dir=".threestudio_cache/text_embeddings_3DTopia"
+```
+
+#### Option 2: Train with DALLE+Midjourney Text Prompts
+Choose the appropriate command based on your GPU configuration:
+
+```sh
+# Single GPU
+CUDA_VISIBLE_DEVICES=0 python launch.py \
+    --config configs/TriplaneTurbo_v0_acc-2.yaml \
+    --train \
+    data.prompt_library="DALLE_Midjourney_prompt_library" \
+    data.condition_processor.cache_dir=".threestudio_cache/text_embeddings_DE+MJ" \
+    data.guidance_processor.cache_dir=".threestudio_cache/text_embeddings_DE+MJ"
+```
+
+For multi-GPU training (higher performance):
+```sh
+# 8 GPUs with 48GB+ memory each
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python launch.py \
+    --config configs/TriplaneTurbo_v1_acc-2.yaml \
+    --train \
+    data.prompt_library="DALLE_Midjourney_prompt_library" \
+    data.condition_processor.cache_dir=".threestudio_cache/text_embeddings_DE+MJ" \
+    data.guidance_processor.cache_dir=".threestudio_cache/text_embeddings_DE+MJ"
+```
+
+### 3. Configuration Notes
+- **Memory Requirements**: 
+  - v1 configuration: Requires GPUs with 48GB+ memory
+  - v0 configuration: Works with GPUs that have less memory (46GB+) but with reduced performance
+  
+- **Acceleration Options**:
+  - Use `_acc-2.yaml` configs for gradient accumulation to reduce memory usage
+
+- **Advanced Options**:
+  - For highest quality, use `configs/TriplaneTurbo_v1.yaml` with `system.parallel_guidance=true` (requires 98GB+ memory GPUs)
+  - To disable certain guidance components: add `guidance.rd_weight=0 guidance.sd_weight=0` to the command
+
 
 
 
