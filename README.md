@@ -5,9 +5,11 @@
 ⚠️ WARNING: This branch contains unfiltered original codebase! Not recommended for production use! ⚠️
 </div>
 
----
+
 
 </div>
+
+> **Note:** This branch is specifically maintained to verify how the same evaluation code performs across different codebases. It allows us to analyze the impact of different implementation environments on evaluation metrics while keeping the evaluation code itself consistent.
 
 ## 🛠️ Official Installation
 
