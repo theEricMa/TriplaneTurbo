@@ -17,7 +17,7 @@ For installation instructions, please refer to the [main branch](https://github.
 
 ## 📊 Evaluation
 
-If you only want to run the evaluation without training, follow these steps:
+Same as in the main branch, follow these steps:
 
 ```sh
 # Download the model from HuggingFace
