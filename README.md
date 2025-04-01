@@ -14,6 +14,7 @@
 <a href="https://arxiv.org/abs/2503.21694"><img src='https://img.shields.io/badge/arXiv-Paper-red?logo=arxiv&logoColor=white' alt='arXiv'></a>
 <a href='https://theericma.github.io/TriplaneTurbo/'><img src='https://img.shields.io/badge/Project_Page-Website-green?logo=googlechrome&logoColor=white' alt='Project Page'></a>
 <a href='https://huggingface.co/spaces/ZhiyuanthePony/TriplaneTurbo'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Live_Demo-blue'></a>
+<a href='https://theericma.github.io/TriplaneTurbo/static/pdf/main.pdf'><img src='https://img.shields.io/badge/Slides-Presentation-orange?logo=microsoftpowerpoint&logoColor=white' alt='Presentation Slides'></a>
 </div>
 
 
@@ -24,6 +25,7 @@
 <!-- Updates -->
 ## ⏩ Updates
 
+- **2025-03-28**: Presentation slides are now available for download.
 - **2025-03-27**: The paper is now available on Arxiv.
 - **2025-03-03**: Gradio and HuggingFace Demos are available.
 - **2025-02-27**: TriplaneTurbo is accepted to CVPR 2025.
