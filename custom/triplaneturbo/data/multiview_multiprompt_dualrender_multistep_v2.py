@@ -354,7 +354,7 @@ class BaseDataset(Dataset, Updateable):
             "camera_distances_relative": camera_distances_relative,
             "height": self.height,
             "width": self.width,
-            "fovy": fovy_deg,
+            "fovy": fovy,
             "rays_d_rasterize":  rays_d_rasterize
         }
 
